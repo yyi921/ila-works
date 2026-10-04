@@ -1,0 +1,103 @@
+"""Django settings for iLA. All secrets and environment-specific values come from env vars (see .env.example)."""
+
+from pathlib import Path
+
+import environ
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+env = environ.Env(
+    DJANGO_DEBUG=(bool, False),
+    DJANGO_ALLOWED_HOSTS=(list, []),
+    DJANGO_CSRF_TRUSTED_ORIGINS=(list, []),
+)
+environ.Env.read_env(BASE_DIR / ".env")
+
+SECRET_KEY = env("DJANGO_SECRET_KEY")
+DEBUG = env("DJANGO_DEBUG")
+ALLOWED_HOSTS = env("DJANGO_ALLOWED_HOSTS")
+CSRF_TRUSTED_ORIGINS = env("DJANGO_CSRF_TRUSTED_ORIGINS")
+
+INSTALLED_APPS = [
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "core",
+    "xero",
+]
+
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+]
+
+ROOT_URLCONF = "config.urls"
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
+]
+
+WSGI_APPLICATION = "config.wsgi.application"
+
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": env("POSTGRES_DB"),
+        "USER": env("POSTGRES_USER"),
+        "PASSWORD": env("POSTGRES_PASSWORD"),
+        "HOST": env("POSTGRES_HOST", default="localhost"),
+        "PORT": env("POSTGRES_PORT", default="5432"),
+        "CONN_MAX_AGE": env.int("POSTGRES_CONN_MAX_AGE", default=60),
+    }
+}
+
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+
+LANGUAGE_CODE = "en-us"
+TIME_ZONE = env("DJANGO_TIME_ZONE", default="UTC")
+USE_I18N = True
+USE_TZ = True
+
+STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+LOGIN_URL = "admin:login"
+
+# --- Xero OAuth 2.0 ---
+XERO_CLIENT_ID = env("XERO_CLIENT_ID")
+XERO_CLIENT_SECRET = env("XERO_CLIENT_SECRET")
+XERO_REDIRECT_URI = env("XERO_REDIRECT_URI", default="http://localhost:8000/xero/callback/")
+XERO_SCOPES = env(
+    "XERO_SCOPES",
+    default="openid profile email offline_access accounting.transactions accounting.contacts accounting.settings",
+)
+XERO_AUTHORIZE_URL = "https://login.xero.com/identity/connect/authorize"
+XERO_TOKEN_URL = "https://identity.xero.com/connect/token"
+XERO_REVOKE_URL = "https://identity.xero.com/connect/revocation"
+XERO_CONNECTIONS_URL = "https://api.xero.com/connections"

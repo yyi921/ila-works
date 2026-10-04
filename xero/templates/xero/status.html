@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Xero connections</title></head>
+<body>
+  <h1>Xero connections</h1>
+  {% for message in messages %}<p class="{{ message.tags }}">{{ message }}</p>{% endfor %}
+  {% if connections %}
+    <ul>
+    {% for c in connections %}
+      <li>
+        {{ c.tenant_name|default:c.tenant_id }} ({{ c.tenant_type }})
+        <form method="post" action="{% url 'xero:disconnect' c.pk %}" style="display:inline">
+          {% csrf_token %}<button type="submit">Disconnect</button>
+        </form>
+      </li>
+    {% endfor %}
+    </ul>
+  {% else %}
+    <p>No organisations connected.</p>
+  {% endif %}
+  <p><a href="{% url 'xero:connect' %}">Connect to Xero</a></p>
+</body>
+</html>
