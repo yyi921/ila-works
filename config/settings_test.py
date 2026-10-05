@@ -2,9 +2,12 @@
 
 import os
 
+from cryptography.fernet import Fernet
+
 os.environ.setdefault("DJANGO_SECRET_KEY", "test-only-not-secret")
 os.environ.setdefault("XERO_CLIENT_ID", "test-client-id")
 os.environ.setdefault("XERO_CLIENT_SECRET", "test-client-secret")
+os.environ.setdefault("FIELD_ENCRYPTION_KEYS", Fernet.generate_key().decode())
 _use_postgres = "POSTGRES_DB" in os.environ
 for _var in ("POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"):
     os.environ.setdefault(_var, "unused")
