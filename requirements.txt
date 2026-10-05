@@ -3,3 +3,5 @@ psycopg[binary]>=3.2
 django-environ>=0.11
 requests>=2.32
 cryptography>=44
+gunicorn>=23
+whitenoise>=6.8

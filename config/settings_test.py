@@ -17,5 +17,8 @@ from .settings import *  # noqa: E402,F403
 if not _use_postgres:
     DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
 
+SECURE_SSL_REDIRECT = False
+WHITENOISE_AUTOREFRESH = True  # serve from finders; no collectstatic needed in tests
+STORAGES = {**STORAGES, "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}}
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 XERO_REDIRECT_URI = "http://testserver/xero/callback/"
