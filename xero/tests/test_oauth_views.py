@@ -201,3 +201,29 @@ def test_callback_does_not_grant_access_to_tenant_owned_by_another_user(user_cli
     conn.refresh_from_db()
     assert conn.access_token == "access-1"
     assert not conn.organisation.members.filter(username="alice").exists()
+
+
+@pytest.mark.django_db
+@responses.activate
+def test_disconnect_revoked_connection_skips_xero(user_client, user):
+    conn = _make_connection(user, status=XeroConnection.Status.REVOKED, access_token="", refresh_token="")
+    resp = user_client.post(reverse("xero:disconnect", args=[conn.pk]))
+    assert resp.status_code == 302
+    assert len(responses.calls) == 0
+    assert not XeroConnection.objects.exists()
+
+
+@pytest.mark.django_db
+@responses.activate
+def test_reconnect_reactivates_revoked_connection(user_client, user):
+    conn = _make_connection(user, status=XeroConnection.Status.REVOKED, access_token="", refresh_token="")
+    state = _set_state(user_client)
+    responses.post(settings.XERO_TOKEN_URL, json=_token_payload(access_token="fresh", refresh_token="fresh-r"))
+    responses.get(settings.XERO_CONNECTIONS_URL, json=[{"id": CONNECTION_ID, "tenantId": TENANT_ID, "tenantName": "Demo Co"}])
+
+    user_client.get(reverse("xero:callback"), {"code": "abc", "state": state})
+
+    conn.refresh_from_db()
+    assert conn.status == XeroConnection.Status.ACTIVE
+    assert (conn.access_token, conn.refresh_token) == ("fresh", "fresh-r")
+    assert Organisation.objects.count() == 1

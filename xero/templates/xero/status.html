@@ -8,7 +8,8 @@
     <ul>
     {% for c in connections %}
       <li>
-        {{ c.tenant_name|default:c.tenant_id }} ({{ c.tenant_type }})
+        {{ c.tenant_name|default:c.tenant_id }}: {{ c.get_status_display }}
+        {% if not c.is_active %}<a href="{% url 'xero:connect' %}">Reconnect</a>{% endif %}
         <form method="post" action="{% url 'xero:disconnect' c.pk %}" style="display:inline">
           {% csrf_token %}<button type="submit">Disconnect</button>
         </form>

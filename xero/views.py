@@ -5,6 +5,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
 from core.models import AuditLog, Organisation, SourceSystem
@@ -60,6 +61,7 @@ def callback(request):
         return redirect("xero:status")
 
     token_fields = {
+        "status": XeroConnection.Status.ACTIVE,
         "access_token": token["access_token"],
         "refresh_token": token["refresh_token"],
         "id_token": token.get("id_token", ""),
@@ -78,6 +80,8 @@ def callback(request):
                 # Already connected under another iLA account; don't hand this user access to its data.
                 messages.error(request, f"{name} is already connected by another user.")
                 continue
+            if connection.status != XeroConnection.Status.ACTIVE:
+                connection.status_changed_at = timezone.now()
             connection.tenant_name = name
             connection.tenant_type = tenant.get("tenantType") or ""
             connection.xero_connection_id = tenant.get("id")
@@ -103,11 +107,11 @@ def disconnect(request, pk):
     connection = get_object_or_404(_user_connections(request.user), pk=pk)
     result = {"tenant_id": str(connection.tenant_id)}
     try:
-        if connection.is_access_token_expired():
-            oauth.refresh(connection)
-        if connection.xero_connection_id:
-            oauth.delete_connection(connection.access_token, connection.xero_connection_id)
+        if connection.is_active and connection.xero_connection_id:
+            oauth.delete_connection(oauth.get_access_token(connection), connection.xero_connection_id)
         result["xero_confirmed"] = True
+    except oauth.XeroConnectionRevoked:
+        result["xero_confirmed"] = True  # already gone at Xero's end
     except oauth.XeroOAuthError:
         # Remove it locally anyway; the user can also revoke the app from Xero's Connected Apps page.
         logger.exception("Failed to disconnect tenant %s at Xero", connection.tenant_id)

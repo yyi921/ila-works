@@ -89,13 +89,27 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 LOGIN_URL = "admin:login"
 
+# Fernet keys for encrypting secrets at rest, newest first. See core/crypto.py.
+FIELD_ENCRYPTION_KEYS = env.list("FIELD_ENCRYPTION_KEYS")
+
 # --- Xero OAuth 2.0 ---
 XERO_CLIENT_ID = env("XERO_CLIENT_ID")
 XERO_CLIENT_SECRET = env("XERO_CLIENT_SECRET")
 XERO_REDIRECT_URI = env("XERO_REDIRECT_URI", default="http://localhost:8000/xero/callback/")
+# Read-only granular scopes (apps created from 2 March 2026 can't request the old broad scopes).
 XERO_SCOPES = env(
     "XERO_SCOPES",
-    default="openid profile email offline_access accounting.transactions accounting.contacts accounting.settings",
+    default=" ".join([
+        "openid", "profile", "email", "offline_access",
+        "accounting.settings.read",
+        "accounting.contacts.read",
+        "accounting.invoices.read",
+        "accounting.payments.read",
+        "accounting.banktransactions.read",
+        "accounting.manualjournals.read",
+        "accounting.reports.profitandloss.read",
+        "accounting.reports.trialbalance.read",
+    ]),
 )
 XERO_AUTHORIZE_URL = "https://login.xero.com/identity/connect/authorize"
 XERO_TOKEN_URL = "https://identity.xero.com/connect/token"
