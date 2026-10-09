@@ -9,6 +9,7 @@ are signed, debit positive.
 """
 
 import hashlib
+from datetime import date
 from decimal import Decimal
 
 from django.conf import settings
@@ -298,12 +299,23 @@ class JournalLine(TenantModel):
 class Dimension(TenantModel):
     """A customer-defined analysis dimension, e.g. event, department, venue, campaign."""
 
+    class AttributeType(models.TextChoices):
+        TEXT = "text", "Text"
+        NUMBER = "number", "Number"
+        DATE = "date", "Date (YYYY-MM-DD)"
+        BOOLEAN = "boolean", "Yes/no"
+
     code = models.SlugField(max_length=50)
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
     tracking_category = models.ForeignKey(
         TrackingCategory, null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
         help_text="Source tracking category this dimension was imported from, if any.",
+    )
+    attribute_fields = models.JSONField(
+        default=list, blank=True,
+        help_text='Customer-defined fields for this dimension\'s values: a list of {"key", "label", "type", '
+                  '"required"} with type one of text, number, date, boolean.',
     )
     is_active = models.BooleanField(default=True)
 
@@ -315,6 +327,35 @@ class Dimension(TenantModel):
     def __str__(self):
         return self.name
 
+    def clean(self):
+        super().clean()
+        if not isinstance(self.attribute_fields, list):
+            raise ValidationError({"attribute_fields": "Must be a list of field definitions."})
+        keys = set()
+        for spec in self.attribute_fields:
+            key = spec.get("key") if isinstance(spec, dict) else None
+            if not key or not isinstance(key, str):
+                raise ValidationError({"attribute_fields": f"Field definition {spec!r} needs a text key."})
+            if key in keys:
+                raise ValidationError({"attribute_fields": f"Field key {key!r} is defined twice."})
+            if spec.get("type", "text") not in self.AttributeType.values:
+                raise ValidationError({"attribute_fields": f"Field {key!r} has unknown type {spec.get('type')!r}."})
+            keys.add(key)
+
+
+def _attribute_ok(kind, value):
+    if kind == Dimension.AttributeType.NUMBER:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if kind == Dimension.AttributeType.BOOLEAN:
+        return isinstance(value, bool)
+    if kind == Dimension.AttributeType.DATE:
+        try:
+            date.fromisoformat(value)
+            return len(value) == 10
+        except (TypeError, ValueError):
+            return False
+    return isinstance(value, str)
+
 
 class DimensionValue(TenantModel):
     dimension = models.ForeignKey(Dimension, on_delete=models.CASCADE, related_name="values")
@@ -323,6 +364,8 @@ class DimensionValue(TenantModel):
     tracking_option = models.ForeignKey(
         TrackingOption, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
+    attributes = models.JSONField(default=dict, blank=True,
+                                  help_text="Values for the fields defined in the dimension's attribute_fields.")
     is_active = models.BooleanField(default=True)
 
     class Meta(TenantModel.Meta):
@@ -332,6 +375,24 @@ class DimensionValue(TenantModel):
 
     def __str__(self):
         return f"{self.dimension}: {self.name}"
+
+    def clean(self):
+        """Check ``attributes`` against the dimension's field definitions: no unknown keys, required fields
+        present, and each value of the declared type."""
+        super().clean()
+        if not isinstance(self.attributes, dict):
+            raise ValidationError({"attributes": "Must be an object of field values."})
+        specs = {spec["key"]: spec for spec in self.dimension.attribute_fields}
+        errors = [f"Unknown field {key!r}." for key in self.attributes if key not in specs]
+        for key, spec in specs.items():
+            value = self.attributes.get(key)
+            if value in (None, ""):
+                if spec.get("required"):
+                    errors.append(f"{spec.get('label', key)} is required.")
+            elif not _attribute_ok(spec.get("type", "text"), value):
+                errors.append(f"{spec.get('label', key)} must be a {spec.get('type', 'text')} value.")
+        if errors:
+            raise ValidationError({"attributes": errors})
 
 
 class Event(TenantModel):
@@ -376,9 +437,12 @@ _ONE_LINE = (
 class Tag(TenantModel):
     """Attributes a share (``allocation``) of one source line to one value of a dimension.
 
+    Tags are the per-line result reports read. They are derived from ``Assignment`` rows (what someone or some
+    rule decided, at line or transaction level) by ``core.tagging.apply_assignments``.
+
     A line's live tags within one dimension must sum to exactly 1.0, so P&L by dimension (amount x allocation)
     ties to the source without double counting. That cross-row rule can't be a database constraint: write tags
-    only through ``core.tagging.set_line_tags`` and check with ``core.tagging.unbalanced_lines``.
+    only through ``core.tagging`` and check with ``core.tagging.unbalanced_lines``.
     """
 
     class Method(models.TextChoices):
@@ -421,6 +485,10 @@ class Tag(TenantModel):
     set_at = models.DateTimeField(default=timezone.now)
     line_source_hash = models.CharField(max_length=64, blank=True, help_text="Line's source_hash when tagged.")
     note = models.TextField(blank=True)
+    assignment = models.ForeignKey(
+        "Assignment", null=True, blank=True, on_delete=models.CASCADE, related_name="tags",
+        help_text="The assignment this tag was derived from.",
+    )
 
     class Meta(TenantModel.Meta):
         constraints = TenantModel.Meta.constraints + [
@@ -453,6 +521,99 @@ class Tag(TenantModel):
 
     def __str__(self):
         return f"{self.line} -> {self.dimension_value}"
+
+
+TARGET_FIELDS = (
+    "document_line", "bank_transaction_line", "journal_line",  # line level
+    "document", "bank_transaction", "journal",  # transaction level
+)
+_ONE_TARGET = Q()
+for _field in TARGET_FIELDS:
+    _ONE_TARGET |= Q(**{f"{_field}__isnull": False}) & Q(
+        *(Q(**{f"{other}__isnull": True}) for other in TARGET_FIELDS if other != _field)
+    )
+
+
+class Assignment(TenantModel):
+    """A decision that one line, or every line of one transaction, belongs to one or more values of a dimension
+    (split by ``AssignmentShare.allocation``). Tagging a group of transactions creates one transaction-level
+    assignment per transaction, sharing a ``batch`` id.
+
+    For each line, the winning live assignment is chosen by precedence: manual beats system (rule, tracking,
+    import), then line level beats transaction level, then the newest wins. ``core.tagging.apply_assignments``
+    turns winners into ``Tag`` rows. A transaction-level assignment also covers lines added later in the source.
+    """
+
+    class Level(models.TextChoices):
+        LINE = "line", "Line"
+        TRANSACTION = "transaction", "Transaction"
+
+    document_line = models.ForeignKey(DocumentLine, null=True, blank=True, on_delete=models.CASCADE,
+                                      related_name="assignments")
+    bank_transaction_line = models.ForeignKey(BankTransactionLine, null=True, blank=True, on_delete=models.CASCADE,
+                                              related_name="assignments")
+    journal_line = models.ForeignKey(JournalLine, null=True, blank=True, on_delete=models.CASCADE,
+                                     related_name="assignments")
+    document = models.ForeignKey(Document, null=True, blank=True, on_delete=models.CASCADE,
+                                 related_name="assignments")
+    bank_transaction = models.ForeignKey(BankTransaction, null=True, blank=True, on_delete=models.CASCADE,
+                                         related_name="assignments")
+    journal = models.ForeignKey(Journal, null=True, blank=True, on_delete=models.CASCADE, related_name="assignments")
+    level = models.CharField(max_length=20, choices=Level.choices, editable=False)
+    dimension = models.ForeignKey(Dimension, on_delete=models.CASCADE, related_name="assignments")
+    method = models.CharField(max_length=20, choices=Tag.Method.choices)
+    rule = models.CharField(max_length=100, blank=True, help_text="Identifier of the rule that proposed it.")
+    confidence = models.CharField(max_length=10, choices=Tag.Confidence.choices)
+    status = models.CharField(max_length=20, choices=Tag.Status.choices, default=Tag.Status.PROPOSED)
+    batch = models.UUIDField(null=True, blank=True, db_index=True,
+                             help_text="Shared by assignments made together, e.g. tagging a group of transactions.")
+    set_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+        help_text="Empty when set by the system.",
+    )
+    set_at = models.DateTimeField(default=timezone.now)
+    note = models.TextField(blank=True)
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.CheckConstraint(condition=_ONE_TARGET, name="core_assignment_exactly_one_target"),
+        ]
+        indexes = [models.Index(fields=["organisation", "dimension", "status"])]
+
+    @property
+    def target_field(self):
+        return next(field for field in TARGET_FIELDS if getattr(self, f"{field}_id"))
+
+    @property
+    def target(self):
+        return getattr(self, self.target_field)
+
+    @property
+    def is_manual(self):
+        return self.method == Tag.Method.MANUAL
+
+    def save(self, *args, **kwargs):
+        self.level = self.Level.LINE if self.target_field.endswith("_line") else self.Level.TRANSACTION
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.target} -> {self.dimension} ({self.get_method_display()})"
+
+
+class AssignmentShare(models.Model):
+    assignment = models.ForeignKey(Assignment, on_delete=models.CASCADE, related_name="shares")
+    dimension_value = models.ForeignKey(DimensionValue, on_delete=models.PROTECT, related_name="+")
+    allocation = models.DecimalField(max_digits=7, decimal_places=6, default=Decimal("1"))
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["assignment", "dimension_value"], name="core_assignmentshare_uniq"),
+            models.CheckConstraint(condition=Q(allocation__gt=0, allocation__lte=1),
+                                   name="core_assignmentshare_allocation_range"),
+        ]
+
+    def __str__(self):
+        return f"{self.dimension_value} {self.allocation}"
 
 
 class ImportFile(TenantModel):
