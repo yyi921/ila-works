@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "core",
     "xero",
+    "console",
 ]
 
 MIDDLEWARE = [
@@ -135,6 +136,10 @@ XERO_SCOPES = env(
         "accounting.manualjournals.read",
         "accounting.reports.profitandloss.read",
         "accounting.reports.trialbalance.read",
+        "accounting.reports.balancesheet.read",
+        "accounting.reports.banksummary.read",
+        "accounting.reports.aged.read",
+        "accounting.budgets.read",
     ]),
 )
 XERO_AUTHORIZE_URL = "https://login.xero.com/identity/connect/authorize"

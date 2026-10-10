@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.db import connection
 from django.http import HttpResponse
 from django.urls import include, path
+from django.views.generic import RedirectView
 
 
 def healthz(request):
@@ -14,4 +15,6 @@ urlpatterns = [
     path("healthz/", healthz),
     path("admin/", admin.site.urls),
     path("xero/", include("xero.urls")),
+    path("console/", include("console.urls")),
+    path("", RedirectView.as_view(pattern_name="console:console", permanent=False)),
 ]

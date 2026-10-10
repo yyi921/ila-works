@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iLA console</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2dc; --accent: #1f5f8b;
+    --neg: #b3261e; --warn-bg: #fff6e0; --warn: #7a5300; --total: #f0efe9; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --panel: #1f1f1d; --text: #ecebe6; --muted: #9a9993; --line: #34332f; --accent: #7fb6dc;
+            --neg: #f2857c; --warn-bg: #3a2f12; --warn: #f0c96a; --total: #292825; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap;
+           padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+           position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .org { color: var(--muted); }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px 20px 140px; }
+  .entry { margin: 0 0 22px; }
+  .cmd { font-family: var(--mono); color: var(--accent); margin-bottom: 6px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .card h2 { font-size: 15px; margin: 0; }
+  .sub { color: var(--muted); margin: 2px 0 10px; }
+  .error { border-color: var(--neg); color: var(--neg); }
+  .figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 10px 0; }
+  .figure { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+  .figure .label { color: var(--muted); font-size: 12px; }
+  .figure .value { font-size: 20px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .figure .detail { color: var(--muted); font-size: 12px; }
+  .table-wrap { overflow-x: auto; margin: 10px 0; }
+  .table-title { font-weight: 600; margin: 12px 0 4px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.num, th.num { text-align: right; }
+  tr.total td { font-weight: 600; background: var(--total); }
+  .neg { color: var(--neg); }
+  .note { color: var(--muted); margin: 8px 0 0; font-size: 13px; }
+  .note.warning { background: var(--warn-bg); color: var(--warn); padding: 6px 10px; border-radius: 6px; }
+  .bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
+         padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .bar form { max-width: 1100px; margin: 0 auto; display: flex; gap: 8px; }
+  .bar input[type=text] { flex: 1; font: 15px var(--mono); padding: 10px 12px; border: 1px solid var(--line);
+                          border-radius: 6px; background: var(--bg); color: var(--text); min-width: 0; }
+  .bar button { padding: 0 16px; border: 0; border-radius: 6px; background: var(--accent); color: var(--panel); font-weight: 600; }
+  .hint { max-width: 1100px; margin: 6px auto 0; color: var(--muted); font-size: 12px; }
+  .busy { color: var(--muted); font-style: italic; }
+  a { color: var(--accent); }
+  header .right { display: flex; gap: 14px; align-items: baseline; }
+  .toggle { font: 12px var(--mono); background: none; border: 1px solid var(--line); color: var(--muted);
+            border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+  .prompt { display: none; }
+
+  /* Incognito: a crisp white-on-black terminal. */
+  html.incognito {
+    --bg: #0c0c0c; --panel: #0c0c0c; --text: #f2f2f2; --muted: #a0a0a0; --line: #5a5a5a; --accent: #ffffff;
+    --neg: #ff6b6b; --warn-bg: #f2f2f2; --warn: #0c0c0c; --total: #1e1e1e;
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, monospace; color-scheme: dark;
+  }
+  html.incognito body { font: 15px/1.5 var(--mono); -webkit-font-smoothing: antialiased; }
+  html.incognito header { border-bottom: 3px double var(--line); }
+  html.incognito header h1 { font-size: 18px; font-weight: bold; letter-spacing: 1px; }
+  html.incognito header h1::after { content: " :: finance terminal"; font-weight: normal; font-size: 13px; color: var(--muted); }
+  html.incognito .card, html.incognito .figure, html.incognito .bar input[type=text], html.incognito .toggle,
+  html.incognito .bar button, html.incognito .note.warning { border-radius: 0; }
+  html.incognito .card { border: 3px double var(--line); }
+  html.incognito .card h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 1px; }
+  html.incognito .card h2::before { content: "▌ "; }
+  html.incognito .figure { border: 1px dashed var(--line); }
+  html.incognito .figure .label, html.incognito th { text-transform: uppercase; letter-spacing: .5px; font-weight: normal; }
+  html.incognito .figure .label, html.incognito .figure .detail, html.incognito th, html.incognito .note { font-size: 12px; }
+  html.incognito .figure .value { font-size: 22px; }
+  html.incognito th, html.incognito td { border-bottom: 1px dotted var(--line); padding: 3px 10px; }
+  html.incognito tr.total td { border-top: 1px solid var(--text); border-bottom: 3px double var(--text); }
+  html.incognito .table-title { font-weight: normal; text-transform: uppercase; letter-spacing: .5px; margin-top: 18px; }
+  html.incognito .table-title::before { content: "── "; color: var(--muted); }
+  html.incognito .note.warning::before { content: "!! "; }
+  html.incognito .cmd { color: var(--text); }
+  html.incognito .cmd::before { content: "C:\\ILA> "; color: var(--muted); }
+  html.incognito .busy { font-style: normal; }
+  html.incognito .busy::after { content: "█"; animation: blink 1s steps(1) infinite; }
+  html.incognito .bar { border-top: 3px double var(--line); }
+  html.incognito .bar form { align-items: center; }
+  html.incognito .prompt { display: inline; color: var(--muted); }
+  html.incognito .bar input[type=text] { border: 0; background: transparent; caret-color: var(--text); outline: none; padding: 6px 4px; }
+  html.incognito .bar input::placeholder { color: var(--line); }
+  html.incognito .bar button { background: var(--text); color: var(--bg); font: bold 14px var(--mono); padding: 5px 12px; }
+  html.incognito .bar button::before { content: "["; } html.incognito .bar button::after { content: "]"; }
+  html.incognito ::selection { background: var(--text); color: var(--bg); }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { html.incognito .busy::after { animation: none; } }
+</style>
+<script>
+  try { if (localStorage.getItem("ila-theme") === "incognito") document.documentElement.classList.add("incognito"); } catch (e) {}
+</script>
+</head>
+<body>
+<header>
+  <h1>iLA</h1>
+  <div class="right">
+    <span class="org" id="org">{% if organisation %}{{ organisation.name }}{% else %}No organisation connected{% endif %}</span>
+    <button type="button" class="toggle" id="theme" aria-pressed="false">Incognito</button>
+  </div>
+</header>
+<main id="log" aria-live="polite">
+  <div class="entry"><div class="card"><h2>Welcome</h2>
+    <p class="sub">Type a command starting with <code>/</code>. Try <code>/status</code> or <code>/help</code>.
+    Parameters follow <code>--</code> in any order; <code>&gt;&gt; file.xlsx</code> saves the result.</p></div></div>
+</main>
+<div class="bar">
+  <form id="form" autocomplete="off">
+    {% csrf_token %}
+    <span class="prompt" aria-hidden="true">&gt;</span>
+    <input type="text" id="input" placeholder="/status --September 2026 --revenue --mtd" aria-label="Command" autofocus>
+    <input type="file" id="file" hidden>
+    <button type="submit">Run</button>
+  </form>
+  <div class="hint">Enter runs · ↑ ↓ history · Tab completes a command name · /clean clears the screen</div>
+</div>
+{{ command_names|json_script:"command-names" }}
+<script>
+(() => {
+  const log = document.getElementById("log");
+  const input = document.getElementById("input");
+  const fileInput = document.getElementById("file");
+  const form = document.getElementById("form");
+  const csrf = form.querySelector("[name=csrfmiddlewaretoken]").value;
+  const names = JSON.parse(document.getElementById("command-names").textContent || "[]");
+  let history = [];
+  try { history = JSON.parse(localStorage.getItem("ila-history") || "[]"); } catch (e) {}
+  let cursor = history.length;
+
+  const themeButton = document.getElementById("theme");
+  const showTheme = () => {
+    const on = document.documentElement.classList.contains("incognito");
+    themeButton.setAttribute("aria-pressed", on);
+    themeButton.textContent = on ? "Standard" : "Incognito";
+  };
+  themeButton.addEventListener("click", () => {
+    const on = document.documentElement.classList.toggle("incognito");
+    try { localStorage.setItem("ila-theme", on ? "incognito" : "standard"); } catch (e) {}
+    showTheme();
+    input.focus();
+  });
+  showTheme();
+
+  const el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+
+  function renderBlock(block) {
+    if (block.type === "note") return el("p", "note " + block.level, block.text);
+    if (block.type === "figures") {
+      const grid = el("div", "figures");
+      for (const f of block.items) {
+        const box = el("div", "figure");
+        box.append(el("div", "label", f.label), el("div", "value" + (f.negative ? " neg" : ""), f.value || "–"));
+        if (f.detail) box.append(el("div", "detail", f.detail));
+        grid.append(box);
+      }
+      return grid;
+    }
+    const wrap = el("div");
+    if (block.title) wrap.append(el("div", "table-title", block.title));
+    const scroller = el("div", "table-wrap");
+    const table = el("table");
+    const numeric = block.columns.map(c => ["money", "pct", "number"].includes(c.kind));
+    const head = el("tr");
+    block.columns.forEach((c, i) => head.append(el("th", numeric[i] ? "num" : "", c.label)));
+    const thead = el("thead");
+    thead.append(head);
+    table.append(thead);
+    const body = el("tbody");
+    for (const row of block.rows) {
+      const tr = el("tr", row.total ? "total" : "");
+      row.cells.forEach((v, i) => tr.append(el("td", (numeric[i] ? "num" : "") + (row.negative[i] ? " neg" : ""), v)));
+      body.append(tr);
+    }
+    table.append(body);
+    scroller.append(table);
+    wrap.append(scroller);
+    return wrap;
+  }
+
+  function addEntry(command) {
+    const entry = el("div", "entry");
+    entry.append(el("div", "cmd", command));
+    const card = el("div", "card");
+    card.append(el("p", "busy", "Working…"));
+    entry.append(card);
+    log.append(entry);
+    entry.scrollIntoView({block: "end"});
+    return card;
+  }
+
+  function showResult(card, data) {
+    card.replaceChildren();
+    if (!data.ok) {
+      card.classList.add("error");
+      card.append(el("p", "", data.error));
+      return;
+    }
+    const r = data.result;
+    card.append(el("h2", "", r.title));
+    if (r.subtitle) card.append(el("p", "sub", r.subtitle));
+    for (const block of r.blocks) card.append(renderBlock(block));
+    if (r.link) {
+      const a = el("a", "", "Open the Xero sign-in");
+      a.href = r.link;
+      card.append(a);
+    }
+    if (data.organisation !== undefined) document.getElementById("org").textContent = data.organisation || "No organisation connected";
+  }
+
+  async function run(command, file) {
+    const card = addEntry(command);
+    const body = new FormData();
+    body.append("command", command);
+    if (file) body.append("file", file);
+    let resp;
+    try {
+      resp = await fetch("{% url 'console:run' %}", {method: "POST", body, headers: {"X-CSRFToken": csrf}});
+    } catch (e) {
+      showResult(card, {ok: false, error: "Couldn't reach iLA. Check your connection and try again."});
+      return;
+    }
+    try {
+      const type = resp.headers.get("Content-Type") || "";
+      if (type.includes("application/json")) {
+        showResult(card, await resp.json());
+      } else if (resp.ok) {
+        const disposition = resp.headers.get("Content-Disposition") || "";
+        const name = (disposition.match(/filename="([^"]+)"/) || [, "export"])[1];
+        const url = URL.createObjectURL(await resp.blob());
+        const a = el("a", "", "Download " + name);
+        a.href = url;
+        a.download = name;
+        card.replaceChildren(el("p", "", "Saved "), a);
+        a.click();
+      } else {
+        showResult(card, {ok: false, error: "The server returned an error (" + resp.status + ")."});
+      }
+    } catch (e) {
+      console.error(e);
+      showResult(card, {ok: false, error: "iLA answered but the page couldn't display the result (" + e.message + ")."});
+    }
+    card.parentElement.scrollIntoView({block: "end"});
+  }
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const command = input.value.trim();
+    if (!command) return;
+    history = history.filter(h => h !== command).concat(command).slice(-200);
+    try { localStorage.setItem("ila-history", JSON.stringify(history)); } catch (e) {}
+    cursor = history.length;
+    input.value = "";
+    if (/^\/(clean|clear|cls)\s*$/i.test(command)) {
+      log.replaceChildren();
+      return;
+    }
+    if (command.includes("<<")) {
+      fileInput.onchange = () => { if (fileInput.files[0]) run(command, fileInput.files[0]); fileInput.value = ""; };
+      fileInput.click();
+    } else {
+      run(command);
+    }
+  });
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowUp" && cursor > 0) {
+      cursor -= 1; input.value = history[cursor]; event.preventDefault();
+    } else if (event.key === "ArrowDown") {
+      cursor = Math.min(cursor + 1, history.length); input.value = history[cursor] || ""; event.preventDefault();
+    } else if (event.key === "Tab") {
+      const m = input.value.match(/^\/(\w*)$/);
+      if (m) {
+        const hits = names.filter(n => n.startsWith(m[1].toLowerCase()));
+        if (hits.length === 1) input.value = "/" + hits[0] + " ";
+        else if (hits.length > 1) {
+          const card = addEntry(input.value);
+          card.replaceChildren(el("p", "", hits.map(h => "/" + h).join("   ")));
+        }
+        event.preventDefault();
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>
