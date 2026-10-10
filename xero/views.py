@@ -73,9 +73,8 @@ def callback(request):
             name = tenant.get("tenantName") or ""
             connection = XeroConnection.objects.filter(tenant_id=tenant["tenantId"]).first()
             if connection is None:
-                connection = XeroConnection(
-                    tenant_id=tenant["tenantId"], organisation=Organisation.objects.create(name=name or "Xero organisation")
-                )
+                connection = XeroConnection(tenant_id=tenant["tenantId"],
+                                            organisation=_unconnected_organisation(request.user, name))
             elif not connection.organisation.members.filter(pk=request.user.pk).exists():
                 # Already connected under another iLA account; don't hand this user access to its data.
                 messages.error(request, f"{name} is already connected by another user.")
@@ -101,6 +100,14 @@ def callback(request):
     return redirect("xero:status")
 
 
+def _unconnected_organisation(user, name):
+    """The organisation for a newly connected tenant: one of the user's own with the same name and no Xero
+    connection (left from before disconnects kept their record), else a new one."""
+    existing = (Organisation.objects.filter(members=user, name__iexact=name, xero_connection__isnull=True)
+                .order_by("pk").first() if name else None)
+    return existing or Organisation.objects.create(name=name or "Xero organisation")
+
+
 @login_required
 @require_POST
 def disconnect(request, pk):
@@ -117,9 +124,14 @@ def disconnect(request, pk):
         logger.exception("Failed to disconnect tenant %s at Xero", connection.tenant_id)
         messages.warning(request, "Xero did not confirm the disconnect; removed locally.")
         result["xero_confirmed"] = False
+    # Keep the connection record (without tokens) so reconnecting the same tenant reuses its Organisation.
     # Synced data stays with the Organisation; deletion is a separate offboarding step.
     organisation, name = connection.organisation, str(connection)
-    connection.delete()
+    connection.status = XeroConnection.Status.DISCONNECTED
+    connection.status_changed_at = timezone.now()
+    connection.access_token = connection.refresh_token = connection.id_token = ""
+    connection.xero_connection_id = None
+    connection.save()
     AuditLog.objects.create(
         organisation=organisation, user=request.user, action=AuditLog.Action.DISCONNECT,
         input="disconnect xero", result=result,
