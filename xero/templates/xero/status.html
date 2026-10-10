@@ -10,9 +10,11 @@
       <li>
         {{ c.tenant_name|default:c.tenant_id }}: {{ c.get_status_display }}
         {% if not c.is_active %}<a href="{% url 'xero:connect' %}">Reconnect</a>{% endif %}
+        {% if c.is_active %}
         <form method="post" action="{% url 'xero:disconnect' c.pk %}" style="display:inline">
           {% csrf_token %}<button type="submit">Disconnect</button>
         </form>
+        {% endif %}
       </li>
     {% endfor %}
     </ul>

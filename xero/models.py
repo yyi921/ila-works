@@ -13,6 +13,7 @@ class XeroConnection(models.Model):
     class Status(models.TextChoices):
         ACTIVE = "active", "Connected"
         REVOKED = "revoked", "Disconnected in Xero"
+        DISCONNECTED = "disconnected", "Disconnected in iLA"
 
     organisation = models.OneToOneField(Organisation, on_delete=models.CASCADE, related_name="xero_connection")
     tenant_id = models.UUIDField(unique=True)
