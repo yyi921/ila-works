@@ -146,3 +146,8 @@ XERO_AUTHORIZE_URL = "https://login.xero.com/identity/connect/authorize"
 XERO_TOKEN_URL = "https://identity.xero.com/connect/token"
 XERO_REVOKE_URL = "https://identity.xero.com/connect/revocation"
 XERO_CONNECTIONS_URL = "https://api.xero.com/connections"
+
+# --- Language model (reads billing documents for /_createInvoice; never acts on its own) ---
+# Documents sent here leave iLA: use synthetic or approved documents only.
+ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="").strip()
+ILA_LLM_MODEL = env("ILA_LLM_MODEL", default="claude-sonnet-5-5")

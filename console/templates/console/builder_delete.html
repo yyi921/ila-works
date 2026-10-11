@@ -1,0 +1,15 @@
+{% extends "console/builder_base.html" %}
+{% block title %}Delete /{{ custom.name }} · iLA builder{% endblock %}
+{% block content %}
+  <div class="card">
+    <h2>Delete /{{ custom.name }}?</h2>
+    <p class="sub">{{ custom.summary }}</p>
+    <p>No one in {{ organisation.name }} will be able to run it after this. The audit log keeps a copy of what it did.
+      To stop it for now instead, edit it and untick Active.</p>
+    <form method="post" class="actions">
+      {% csrf_token %}
+      <button class="btn danger" type="submit">Delete /{{ custom.name }}</button>
+      <a class="btn quiet" href="{% url 'console:builder_edit' custom.pk %}">Keep it</a>
+    </form>
+  </div>
+{% endblock %}

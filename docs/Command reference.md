@@ -4,6 +4,8 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 
 **Periods** (wherever `--<period>` appears): `September 2026`, `Sep 2026`, `Sep-26`, `2026-09`, `09/2026`, `this month`, `last month`, `this quarter`, `last quarter`, `Q1 FY2027`, `FY2026`, `this fy`, `last fy`, `today`, `yesterday`, a date such as `30/06/2026` (day first), or a range: `Jul 2026 to Sep 2026`. Quarters and years follow the financial year end set in Xero.
 
+**Built commands** start with `_` (`/_weekly`, or just `_weekly`) and belong to one organisation. Superusers make them on the Builder page (top bar). `/help` lists them and `/help _name` shows the commands they run. They are not listed here because each organisation has its own. A command made from the createInvoice template (e.g. `/_createInvoice [customer] [--new]`) starts a guided conversation; while it is open, plain answers (no `/`) go to it, `<<` adds files (several at once), `approve` builds the import file and `/cancel` drops the draft.
+
 ## Summary
 
 | Command | Also | What it does | Usage |
@@ -23,6 +25,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/orgs` |  | List your organisations; * marks the one in use. | `/orgs` |
 | `/use` |  | Switch to another organisation. | `/use <name>` |
 | `/connect` |  | Connect or reconnect Xero (grants any new permissions). | `/connect` |
+| `/cancel` |  | Drop your open /_createInvoice draft. Nothing is written anywhere. | `/cancel` |
 | `/clean` | `/clear`, `/cls` | Clear the results on screen. Your command history (up arrow) is kept. | `/clean` |
 | `/help` | `/?` | List commands, or show how to use one: /help status. | `/help [command]` |
 

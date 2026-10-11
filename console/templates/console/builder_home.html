@@ -1,0 +1,52 @@
+{% extends "console/builder_base.html" %}
+{% block content %}
+{% if not organisation %}
+  <div class="card"><h2>No organisation</h2><p class="sub">Connect an organisation in the console first.</p></div>
+{% else %}
+  {% if message %}<p class="note warning">{{ message }}</p>{% endif %}
+  <h2>Builder</h2>
+  <p class="explain">Make {{ organisation.name }}'s own commands. Built commands start with <code>_</code>, so they
+    never clash with iLA's own commands, and anyone in the organisation can run them from the console as
+    <code>/_name</code> (or just <code>_name</code>). Every change is recorded in the audit log.</p>
+
+  <h2>Start from a template</h2>
+  <div class="grid">
+    {% for t in templates %}
+      <div class="card tpl{% if not t.available %} unavailable{% endif %}">
+        <h3>{% if t.key != "shortcut" %}_{% endif %}{{ t.title }}
+          {% if t.available %}<span class="badge on">Available</span>{% else %}<span class="badge">Planned</span>{% endif %}</h3>
+        <p class="sub">{{ t.summary }}</p>
+        <ul>{% for g in t.goals %}<li>{{ g }}</li>{% endfor %}</ul>
+        {% if t.available %}
+          <a class="btn" href="{% url 'console:builder_new' t.key %}">Use this template</a>
+        {% else %}
+          <button class="btn" type="button" disabled>Not built yet</button>
+          <p class="explain">{{ t.status_note }}</p>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+
+  <h2>{{ organisation.name }}'s commands</h2>
+  {% if commands %}
+    <div class="card"><div class="table-wrap"><table>
+      <thead><tr><th>Command</th><th>What it does</th><th>Made from</th><th>Status</th><th>Last changed</th><th></th></tr></thead>
+      <tbody>
+      {% for c in commands %}
+        <tr>
+          <td class="mono">/{{ c.name }}</td>
+          <td class="wrap">{{ c.summary }}</td>
+          <td>{{ c.get_template_display }}</td>
+          <td>{% if c.is_active %}Active{% else %}Off{% endif %}</td>
+          <td>{{ c.updated_at|date:"j M Y H:i" }}{% if c.updated_by %} · {{ c.updated_by.get_username }}{% endif %}</td>
+          <td><a href="{% url 'console:builder_edit' c.pk %}">Edit</a>{% if c.is_active %} ·
+              <a href="{% url 'console:console' %}?cmd=/{{ c.name|urlencode }}">Try</a>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table></div></div>
+  {% else %}
+    <p class="explain">None yet. Start from a template above.</p>
+  {% endif %}
+{% endif %}
+{% endblock %}

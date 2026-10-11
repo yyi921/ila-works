@@ -1,0 +1,47 @@
+{% extends "console/builder_base.html" %}
+{% block title %}{% if custom %}Edit /{{ custom.name }}{% else %}New command{% endif %} · iLA builder{% endblock %}
+{% block content %}
+  <p><a href="{% url 'console:builder' %}">← Builder</a></p>
+  <div class="card">
+    <h2>{% if custom %}Edit /{{ custom.name }}{% else %}New command: {{ template.title }}{% endif %}</h2>
+    <p class="sub">{{ template.summary }}</p>
+    <form method="post" class="edit" novalidate>
+      {% csrf_token %}
+      {% if form.non_field_errors %}<ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+      {% for field in form %}
+        {% if field.name == "is_active" %}
+          <div class="check" style="margin-top:14px">{{ field }} {{ field.label_tag }}</div>
+        {% else %}
+          {{ field.label_tag }}
+          {% if field.name == "name" %}<input type="text" name="name" id="id_name" maxlength="32" required
+            value="{{ field.value|default_if_none:'_' }}" placeholder="_weekly">{% else %}{{ field }}{% endif %}
+          <div class="help">{{ field.help_text }}</div>
+        {% endif %}
+        {% if field.errors %}<ul class="errors">{% for e in field.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+      {% endfor %}
+      {% if template.key == "shortcut" %}
+      <div class="card" style="margin-top:16px">
+        <div class="table-title">Example</div>
+        <p class="explain">A supplier check you run every month:</p>
+        <pre class="mono explain">/compare --bill {text} {params}
+/creditors</pre>
+        <p class="explain">Saved as <code>_supplier</code>, typing <code>/_supplier onemusic --Oct 2024 to Sep 2026</code>
+          runs <code>/compare --bill onemusic --Oct 2024 to Sep 2026</code>, then <code>/creditors</code>,
+          and shows both as one report.</p>
+      </div>
+      {% else %}
+      <div class="card" style="margin-top:16px">
+        <div class="table-title">How it works</div>
+        <ul class="explain">{% for g in template.goals %}<li>{{ g }}</li>{% endfor %}</ul>
+        <p class="explain">What it bills, how items are priced and coded, and where the billing information comes
+          from are set per organisation on its admin page, under <a href="{% url 'admin:core_organisation_change' organisation.pk %}">Invoice set-ups</a>.</p>
+      </div>
+      {% endif %}
+      <div class="actions">
+        <button class="btn" type="submit">Save</button>
+        <a class="btn quiet" href="{% url 'console:builder' %}">Cancel</a>
+        {% if custom %}<a class="btn quiet" href="{% url 'console:builder_delete' custom.pk %}">Delete…</a>{% endif %}
+      </div>
+    </form>
+  </div>
+{% endblock %}

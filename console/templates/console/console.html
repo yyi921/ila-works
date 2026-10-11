@@ -4,109 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>iLA console</title>
-<style>
-  :root {
-    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2dc; --accent: #1f5f8b;
-    --neg: #b3261e; --warn-bg: #fff6e0; --warn: #7a5300; --total: #f0efe9; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #161615; --panel: #1f1f1d; --text: #ecebe6; --muted: #9a9993; --line: #34332f; --accent: #7fb6dc;
-            --neg: #f2857c; --warn-bg: #3a2f12; --warn: #f0c96a; --total: #292825; color-scheme: dark; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap;
-           padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
-           position: sticky; top: 0; z-index: 5; }
-  header h1 { font-size: 16px; margin: 0; }
-  header .org { color: var(--muted); }
-  main { max-width: 1100px; margin: 0 auto; padding: 16px 20px 140px; }
-  .entry { margin: 0 0 22px; }
-  .cmd { font-family: var(--mono); color: var(--accent); margin-bottom: 6px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
-  .card h2 { font-size: 15px; margin: 0; }
-  .sub { color: var(--muted); margin: 2px 0 10px; }
-  .error { border-color: var(--neg); color: var(--neg); }
-  .figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 10px 0; }
-  .figure { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
-  .figure .label { color: var(--muted); font-size: 12px; }
-  .figure .value { font-size: 20px; font-variant-numeric: tabular-nums; margin-top: 2px; }
-  .figure .detail { color: var(--muted); font-size: 12px; }
-  .table-wrap { overflow-x: auto; margin: 10px 0; }
-  .table-title { font-weight: 600; margin: 12px 0 4px; }
-  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-  th, td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
-  th { color: var(--muted); font-weight: 600; font-size: 12px; }
-  td.num, th.num { text-align: right; }
-  tr.total td { font-weight: 600; background: var(--total); }
-  .neg { color: var(--neg); }
-  .note { color: var(--muted); margin: 8px 0 0; font-size: 13px; }
-  .note.warning { background: var(--warn-bg); color: var(--warn); padding: 6px 10px; border-radius: 6px; }
-  .bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
-         padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0px)); }
-  .bar form { max-width: 1100px; margin: 0 auto; display: flex; gap: 8px; }
-  .bar input[type=text] { flex: 1; font: 15px var(--mono); padding: 10px 12px; border: 1px solid var(--line);
-                          border-radius: 6px; background: var(--bg); color: var(--text); min-width: 0; }
-  .bar button { padding: 0 16px; border: 0; border-radius: 6px; background: var(--accent); color: var(--panel); font-weight: 600; }
-  .hint { max-width: 1100px; margin: 6px auto 0; color: var(--muted); font-size: 12px; }
-  .busy { color: var(--muted); font-style: italic; }
-  a { color: var(--accent); }
-  header .right { display: flex; gap: 14px; align-items: baseline; }
-  .toggle { font: 12px var(--mono); background: none; border: 1px solid var(--line); color: var(--muted);
-            border-radius: 4px; padding: 2px 8px; cursor: pointer; }
-  .prompt { display: none; }
-
-  /* Incognito: a crisp white-on-black terminal. */
-  html.incognito {
-    --bg: #0c0c0c; --panel: #0c0c0c; --text: #f2f2f2; --muted: #a0a0a0; --line: #5a5a5a; --accent: #ffffff;
-    --neg: #ff6b6b; --warn-bg: #f2f2f2; --warn: #0c0c0c; --total: #1e1e1e;
-    --mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, monospace; color-scheme: dark;
-  }
-  html.incognito body { font: 15px/1.5 var(--mono); -webkit-font-smoothing: antialiased; }
-  html.incognito header { border-bottom: 3px double var(--line); }
-  html.incognito header h1 { font-size: 18px; font-weight: bold; letter-spacing: 1px; }
-  html.incognito header h1::after { content: " :: finance terminal"; font-weight: normal; font-size: 13px; color: var(--muted); }
-  html.incognito .card, html.incognito .figure, html.incognito .bar input[type=text], html.incognito .toggle,
-  html.incognito .bar button, html.incognito .note.warning { border-radius: 0; }
-  html.incognito .card { border: 3px double var(--line); }
-  html.incognito .card h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 1px; }
-  html.incognito .card h2::before { content: "▌ "; }
-  html.incognito .figure { border: 1px dashed var(--line); }
-  html.incognito .figure .label, html.incognito th { text-transform: uppercase; letter-spacing: .5px; font-weight: normal; }
-  html.incognito .figure .label, html.incognito .figure .detail, html.incognito th, html.incognito .note { font-size: 12px; }
-  html.incognito .figure .value { font-size: 22px; }
-  html.incognito th, html.incognito td { border-bottom: 1px dotted var(--line); padding: 3px 10px; }
-  html.incognito tr.total td { border-top: 1px solid var(--text); border-bottom: 3px double var(--text); }
-  html.incognito .table-title { font-weight: normal; text-transform: uppercase; letter-spacing: .5px; margin-top: 18px; }
-  html.incognito .table-title::before { content: "── "; color: var(--muted); }
-  html.incognito .note.warning::before { content: "!! "; }
-  html.incognito .cmd { color: var(--text); }
-  html.incognito .cmd::before { content: "C:\\ILA> "; color: var(--muted); }
-  html.incognito .busy { font-style: normal; }
-  html.incognito .busy::after { content: "█"; animation: blink 1s steps(1) infinite; }
-  html.incognito .bar { border-top: 3px double var(--line); }
-  html.incognito .bar form { align-items: center; }
-  html.incognito .prompt { display: inline; color: var(--muted); }
-  html.incognito .bar input[type=text] { border: 0; background: transparent; caret-color: var(--text); outline: none; padding: 6px 4px; }
-  html.incognito .bar input::placeholder { color: var(--line); }
-  html.incognito .bar button { background: var(--text); color: var(--bg); font: bold 14px var(--mono); padding: 5px 12px; }
-  html.incognito .bar button::before { content: "["; } html.incognito .bar button::after { content: "]"; }
-  html.incognito ::selection { background: var(--text); color: var(--bg); }
-  @keyframes blink { 50% { opacity: 0; } }
-  @media (prefers-reduced-motion: reduce) { html.incognito .busy::after { animation: none; } }
-</style>
-<script>
-  try { if (localStorage.getItem("ila-theme") === "incognito") document.documentElement.classList.add("incognito"); } catch (e) {}
-</script>
+{% include "console/_theme.html" %}
 </head>
 <body>
-<header>
-  <h1>iLA</h1>
-  <div class="right">
-    <span class="org" id="org">{% if organisation %}{{ organisation.name }}{% else %}No organisation connected{% endif %}</span>
-    <button type="button" class="toggle" id="theme" aria-pressed="false">Incognito</button>
-  </div>
-</header>
+{% include "console/_header.html" with page="console" %}
 <main id="log" aria-live="polite">
   <div class="entry"><div class="card"><h2>Welcome</h2>
     <p class="sub">Type a command starting with <code>/</code>. Try <code>/status</code> or <code>/help</code>.
@@ -116,8 +17,8 @@
   <form id="form" autocomplete="off">
     {% csrf_token %}
     <span class="prompt" aria-hidden="true">&gt;</span>
-    <input type="text" id="input" placeholder="/status --September 2026 --revenue --mtd" aria-label="Command" autofocus>
-    <input type="file" id="file" hidden>
+    <input type="text" id="input" placeholder="/status --September 2026 --revenue --mtd" aria-label="Command" value="{{ prefill }}" autofocus>
+    <input type="file" id="file" multiple hidden>
     <button type="submit">Run</button>
   </form>
   <div class="hint">Enter runs · ↑ ↓ history · Tab completes a command name · /clean clears the screen</div>
@@ -135,20 +36,6 @@
   try { history = JSON.parse(localStorage.getItem("ila-history") || "[]"); } catch (e) {}
   let cursor = history.length;
 
-  const themeButton = document.getElementById("theme");
-  const showTheme = () => {
-    const on = document.documentElement.classList.contains("incognito");
-    themeButton.setAttribute("aria-pressed", on);
-    themeButton.textContent = on ? "Standard" : "Incognito";
-  };
-  themeButton.addEventListener("click", () => {
-    const on = document.documentElement.classList.toggle("incognito");
-    try { localStorage.setItem("ila-theme", on ? "incognito" : "standard"); } catch (e) {}
-    showTheme();
-    input.focus();
-  });
-  showTheme();
-
   const el = (tag, cls, text) => {
     const node = document.createElement(tag);
     if (cls) node.className = cls;
@@ -158,6 +45,12 @@
 
   function renderBlock(block) {
     if (block.type === "note") return el("p", "note " + block.level, block.text);
+    if (block.type === "section") {
+      const head = el("div", "section");
+      head.append(el("h3", "", block.title), el("div", "cmd", block.command));
+      if (block.subtitle) head.append(el("p", "sub", block.subtitle));
+      return head;
+    }
     if (block.type === "figures") {
       const grid = el("div", "figures");
       for (const f of block.items) {
@@ -213,18 +106,18 @@
     if (r.subtitle) card.append(el("p", "sub", r.subtitle));
     for (const block of r.blocks) card.append(renderBlock(block));
     if (r.link) {
-      const a = el("a", "", "Open the Xero sign-in");
+      const a = el("a", "", r.link_text || "Open the Xero sign-in");
       a.href = r.link;
       card.append(a);
     }
     if (data.organisation !== undefined) document.getElementById("org").textContent = data.organisation || "No organisation connected";
   }
 
-  async function run(command, file) {
+  async function run(command, files) {
     const card = addEntry(command);
     const body = new FormData();
     body.append("command", command);
-    if (file) body.append("file", file);
+    for (const f of files || []) body.append("file", f);
     let resp;
     try {
       resp = await fetch("{% url 'console:run' %}", {method: "POST", body, headers: {"X-CSRFToken": csrf}});
@@ -268,7 +161,7 @@
       return;
     }
     if (command.includes("<<")) {
-      fileInput.onchange = () => { if (fileInput.files[0]) run(command, fileInput.files[0]); fileInput.value = ""; };
+      fileInput.onchange = () => { if (fileInput.files.length) run(command, [...fileInput.files]); fileInput.value = ""; };
       fileInput.click();
     } else {
       run(command);
@@ -281,9 +174,10 @@
     } else if (event.key === "ArrowDown") {
       cursor = Math.min(cursor + 1, history.length); input.value = history[cursor] || ""; event.preventDefault();
     } else if (event.key === "Tab") {
-      const m = input.value.match(/^\/(\w*)$/);
+      const m = input.value.match(/^(?:\/(\w*)|(_\w*))$/);
       if (m) {
-        const hits = names.filter(n => n.startsWith(m[1].toLowerCase()));
+        const typed = (m[1] ?? m[2]).toLowerCase();
+        const hits = names.filter(n => n.toLowerCase().startsWith(typed));
         if (hits.length === 1) input.value = "/" + hits[0] + " ";
         else if (hits.length > 1) {
           const card = addEntry(input.value);

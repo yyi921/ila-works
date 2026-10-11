@@ -338,6 +338,49 @@ class XeroSource:
               "due": to_decimal(i.get("AmountDue"))} for i in invoices[:50]],
         )
 
+    # --- Invoice creation (read-only look-ups for /_createInvoice) ---
+
+    def customers(self, text):
+        """Contacts whose name, email or account number contains the text (Xero's search), best first."""
+        safe = text.replace('"', "")
+        contacts = self.client.get("Contacts", {"searchTerm": safe, "summaryOnly": "true", "page": 1}).get("Contacts", [])
+        return [{"id": c.get("ContactID", ""), "name": c.get("Name", ""), "email": c.get("EmailAddress", ""),
+                 "account_number": c.get("AccountNumber", ""), "status": c.get("ContactStatus", "")}
+                for c in contacts if c.get("ContactStatus", "ACTIVE") == "ACTIVE"][:50]
+
+    def tax_rates(self):
+        """Tax rates by name: {name: {"type": code, "rate": Decimal percent, "active": bool}}."""
+        return {t.get("Name", ""): {"type": t.get("TaxType", ""), "rate": to_decimal(t.get("EffectiveRate")),
+                                    "active": t.get("Status") == "ACTIVE"}
+                for t in self.client.get("TaxRates", cache_seconds=3600).get("TaxRates", [])}
+
+    def tracking_categories(self):
+        """Active tracking categories: {name: [active option names]}."""
+        return {c.get("Name", ""): [o.get("Name", "") for o in c.get("Options", []) if o.get("Status") == "ACTIVE"]
+                for c in self.client.get("TrackingCategories", cache_seconds=3600).get("TrackingCategories", [])
+                if c.get("Status") == "ACTIVE"}
+
+    def recent_sales_invoices(self):
+        """The 100 most recent sales invoices in any live or draft status, with their lines, so a new invoice can
+        follow how similar lines were coded before. Tax types are Xero codes (e.g. OUTPUT)."""
+        where = 'Type=="ACCREC" AND Status!="DELETED" AND Status!="VOIDED"'
+        invoices = self.client.get("Invoices", {"where": where, "order": "Date DESC", "page": 1}).get("Invoices", [])
+        return [{
+            "number": i.get("InvoiceNumber", ""), "contact": (i.get("Contact") or {}).get("Name", ""),
+            "contact_id": (i.get("Contact") or {}).get("ContactID", ""), "reference": i.get("Reference", ""),
+            "date": record_date(i), "status": i.get("Status", "").title(),
+            "tax_basis": i.get("LineAmountTypes", ""),
+            "lines": [{"description": li.get("Description", ""), "account": li.get("AccountCode", ""),
+                       "tax_type": li.get("TaxType", ""), "unit": to_decimal(li.get("UnitAmount")),
+                       "tracking": [(t.get("Name", ""), t.get("Option", "")) for t in li.get("Tracking") or []]}
+                      for li in i.get("LineItems") or []],
+        } for i in invoices]
+
+    def invoice_number_used(self, number):
+        """Whether any invoice or bill already has this number, in any status."""
+        return bool(self.client.get("Invoices", {"InvoiceNumbers": number, "summaryOnly": "true"},
+                                    cache_seconds=0).get("Invoices"))
+
     # --- Bank reconciliation ---
 
     def unreconciled(self):

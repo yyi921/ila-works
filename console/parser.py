@@ -2,6 +2,8 @@
 
     /command [text] [--param]... [<< input file] [>> output file]
 
+Built commands start with "_" (/_weekly) and may be typed without the slash (_weekly).
+
 Parameters come after ``--`` in any order and may contain spaces ("--September 2026"). ``--`` only starts a
 parameter after whitespace, so values like "INV--001" survive. ``<<`` names an input file, ``>>`` an output file.
 """
@@ -35,9 +37,11 @@ def _unquote(value):
 
 def parse(line):
     raw = line.strip()
+    if raw.startswith("_"):
+        raw = "/" + raw  # built commands may be typed without the slash
     if not raw.startswith("/"):
         raise CommandSyntaxError('Commands start with "/". Type /help to see them.')
-    m = re.match(r"/([A-Za-z][\w-]*)", raw)
+    m = re.match(r"/(_?[A-Za-z][\w-]*)", raw)
     if not m:
         raise CommandSyntaxError("Type a command name after the slash, e.g. /status.")
     cmd = ParsedCommand(name=m.group(1).lower(), raw=raw)
