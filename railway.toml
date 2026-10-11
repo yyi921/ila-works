@@ -1,9 +1,10 @@
 # Railway config-as-code: https://docs.railway.com/reference/config-as-code
 
 [deploy]
-# Runs once per deploy, before the new version takes traffic; a failure aborts the deploy.
-preDeployCommand = ["python manage.py migrate --noinput"]
-startCommand = "python manage.py collectstatic --noinput && gunicorn config.wsgi --bind 0.0.0.0:$PORT --workers 2 --access-logfile -"
+# Migrations run at the start of every container, before gunicorn takes traffic. (A preDeployCommand was used
+# before, but Railway never ran it: production missed every migration after the first until 12 October 2026.)
+# If a migration fails the app doesn't start, the health check fails and the previous version keeps serving.
+startCommand = "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn config.wsgi --bind 0.0.0.0:$PORT --workers 2 --access-logfile -"
 healthcheckPath = "/healthz/"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
