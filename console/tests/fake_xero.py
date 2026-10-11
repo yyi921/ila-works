@@ -154,8 +154,25 @@ def _history(rows, where, number_field, kind):
             for n, c, code, d, acc, amt, tax, types, cur, rate in rows if start <= d <= end]
 
 
+RECENT_SALES = [{
+    "InvoiceID": "i-2070", "InvoiceNumber": "INV-2070", "Type": "ACCREC", "Status": "PAID",
+    "Contact": {"ContactID": "c-harbour", "Name": "Harbour Events Pty Ltd"}, "Reference": "CELTIC NIGHTS 2026",
+    "DateString": "2026-04-30T00:00:00", "LineAmountTypes": "Exclusive",
+    "LineItems": [
+        {"Description": "Venue Hire - Arena", "AccountCode": "200", "TaxType": "OUTPUT", "UnitAmount": "4400.00"},
+        {"Description": "Security", "AccountCode": "260", "TaxType": "OUTPUT", "UnitAmount": "85.00",
+         "Tracking": [{"Name": "Event", "Option": "Celtic Nights"}]},
+        {"Description": "First Aid", "AccountCode": "260", "TaxType": "EXEMPTOUTPUT", "UnitAmount": "100.00"},
+    ]}, {
+    "InvoiceID": "i-2069", "InvoiceNumber": "INV-2069", "Type": "ACCREC", "Status": "DRAFT",
+    "Contact": {"ContactID": "c-smith", "Name": "Smith Wedding"}, "Reference": "Deposit",
+    "DateString": "2026-04-20T00:00:00", "LineAmountTypes": "Inclusive", "LineItems": []}]
+
+
 def invoices(params):
     where = params.get("where", "")
+    if params.get("order") == "Date DESC":
+        return {"Invoices": RECENT_SALES}
     if "Date>=DateTime(" in where:
         if 'Type=="ACCPAY"' in where:
             return {"Invoices": _history(HISTORY, where, "InvoiceNumber", "ACCPAY")}
@@ -248,7 +265,21 @@ def route(path, params):
         rows = CREDIT_HISTORY if 'Type=="ACCPAYCREDIT"' in where else []
         return {"CreditNotes": _history(rows, where, "CreditNoteNumber", "ACCPAYCREDIT")}
     if path == "Contacts":
-        return {"Contacts": [{"Name": "Smith Wedding", "EmailAddress": "smith@example.com", "IsCustomer": True}]}
+        contacts = [{"ContactID": "c-smith", "Name": "Smith Wedding", "EmailAddress": "smith@example.com",
+                     "IsCustomer": True, "ContactStatus": "ACTIVE"},
+                    {"ContactID": "c-harbour", "Name": "Harbour Events Pty Ltd", "EmailAddress": "accounts@harbour.test",
+                     "IsCustomer": True, "ContactStatus": "ACTIVE"}]
+        term = params.get("searchTerm", "").lower()
+        return {"Contacts": [c for c in contacts if term in c["Name"].lower()] if term != "smith" else contacts[:1]}
+    if path == "TaxRates":
+        return {"TaxRates": [
+            {"Name": "GST on Income", "TaxType": "OUTPUT", "EffectiveRate": "10.0000", "Status": "ACTIVE"},
+            {"Name": "GST Free Income", "TaxType": "EXEMPTOUTPUT", "EffectiveRate": "0.0000", "Status": "ACTIVE"},
+            {"Name": "Old Rate", "TaxType": "OLD", "EffectiveRate": "5.0000", "Status": "DELETED"}]}
+    if path == "TrackingCategories":
+        return {"TrackingCategories": [{"Name": "Event", "Status": "ACTIVE", "Options": [
+            {"Name": "Celtic Nights", "Status": "ACTIVE"}, {"Name": "Gala Dinner", "Status": "ACTIVE"},
+            {"Name": "Old Show", "Status": "ARCHIVED"}]}]}
     raise AssertionError(f"unexpected call {path} {params}")
 
 

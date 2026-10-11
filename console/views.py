@@ -3,13 +3,18 @@ import re
 
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse, JsonResponse
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_GET, require_POST
 
-from core.models import AuditLog
+from core.models import AuditLog, ImportFile
 from xero.api import XeroAPIError
 from xero.source import source_for
 
+from core.invoicing import InvoiceFileError
+
+from . import builder, create_invoice
+from .llm import LLMError
+from .models import CustomCommand
 from .output import ExportError, export
 from .parser import CommandSyntaxError, parse
 from .periods import PeriodError
@@ -18,7 +23,8 @@ from .registry import COMMANDS, CommandError, Context, lookup
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-USER_ERRORS = (CommandSyntaxError, CommandError, XeroAPIError, ExportError, PeriodError)
+MAX_UPLOAD_TOTAL_BYTES = 25 * 1024 * 1024
+USER_ERRORS = (CommandSyntaxError, CommandError, XeroAPIError, ExportError, PeriodError, LLMError, InvoiceFileError)
 
 
 def current_organisation(request):
@@ -38,31 +44,29 @@ def _safe_filename(name):
 @require_GET
 def console(request):
     organisation = current_organisation(request)
+    built = []
+    if organisation is not None:
+        built = list(CustomCommand.objects.filter(organisation=organisation, is_active=True)
+                     .values_list("name", flat=True))
     return render(request, "console/console.html",
-                  {"organisation": organisation, "command_names": sorted(COMMANDS)})
+                  {"organisation": organisation, "command_names": sorted(COMMANDS) + built,
+                   "can_build": builder.can_build(request.user), "prefill": request.GET.get("cmd", "")[:200]})
 
 
 @login_required
 @require_POST
 def run(request):
     line = request.POST.get("command", "")
-    upload = request.FILES.get("file")
+    files = request.FILES.getlist("file")
+    upload = files[0] if files else None
     ctx = Context(current_organisation(request), request.user, source_factory=source_for, input_file=upload,
                   session=request.session)
     response, outcome, ok = None, {}, False
     try:
-        cmd = parse(line)
-        spec = lookup(cmd.name)
-        if spec is None:
-            raise CommandError(f"There's no /{cmd.name} command. Type /help to see them all.")
-        if cmd.input_file and not spec.takes_input:
-            raise CommandError(f"/{spec.name} doesn't take an input file (<<).")
-        if spec.takes_input and cmd.input_file and upload is None:
-            raise CommandError(f"Choose the file {cmd.input_file} to upload.")
-        if upload is not None and upload.size > MAX_UPLOAD_BYTES:
-            raise CommandError("Input files can be at most 10 MB.")
-        result = spec.func(ctx, cmd)
-        if cmd.output_file:
+        if sum(f.size for f in files) > MAX_UPLOAD_TOTAL_BYTES:
+            raise CommandError("Choose at most 25 MB of files at a time.")
+        cmd, result = _dispatch(ctx, line, files)
+        if cmd is not None and cmd.output_file:
             filename = _safe_filename(cmd.output_file)
             content, content_type = export(result, filename)
             response = HttpResponse(content, content_type=content_type)
@@ -86,5 +90,53 @@ def run(request):
     return response
 
 
+def _dispatch(ctx, line, files):
+    """(parsed command or None, result). Plain input answers the user's open invoice draft, if there is one."""
+    if not line.lstrip().startswith(("/", "_")):
+        draft = create_invoice.open_draft(ctx)
+        if draft is not None:
+            return None, create_invoice.answer(ctx, draft, line, files)
+    cmd = parse(line)
+    if len(files) > 1:
+        raise CommandError("Choose one file for this command.")
+    if cmd.name.startswith("_"):
+        return cmd, _run_built(ctx, cmd)
+    upload = files[0] if files else None
+    spec = lookup(cmd.name)
+    if spec is None:
+        raise CommandError(f"There's no /{cmd.name} command. Type /help to see them all.")
+    if cmd.input_file and not spec.takes_input:
+        raise CommandError(f"/{spec.name} doesn't take an input file (<<).")
+    if spec.takes_input and cmd.input_file and upload is None:
+        raise CommandError(f"Choose the file {cmd.input_file} to upload.")
+    if upload is not None and upload.size > MAX_UPLOAD_BYTES:
+        raise CommandError("Input files can be at most 10 MB.")
+    return cmd, spec.func(ctx, cmd)
+
+
+def _run_built(ctx, cmd):
+    custom = builder.find(ctx.organisation, cmd.name)
+    if custom is None:
+        where = f" for {ctx.organisation.name}" if ctx.organisation else ""
+        raise CommandError(f"There's no /{cmd.name} command{where}. Type /help to see the commands you can use.")
+    if custom.template == CustomCommand.Template.CREATE_INVOICE:
+        return create_invoice.start(ctx, cmd, custom)
+    return builder.run(ctx, cmd, custom)
+
+
 def _org_name(ctx):
     return ctx.organisation.name if ctx.organisation else ""
+
+
+@login_required
+@require_GET
+def file_download(request, pk):
+    """Download a stored import file. Members of the file's organisation only; every download is audit-logged."""
+    import_file = get_object_or_404(ImportFile, pk=pk, organisation__members=request.user, content__isnull=False)
+    AuditLog.objects.create(organisation=import_file.organisation, user=request.user, action=AuditLog.Action.DOWNLOAD,
+                            input=f"download {import_file.file_name}", target_type="core.importfile",
+                            target_id=str(import_file.pk), result={"sha256": ImportFile.hash_bytes(
+                                bytes(import_file.content))})
+    response = HttpResponse(bytes(import_file.content), content_type=import_file.content_type or "text/csv")
+    response["Content-Disposition"] = f'attachment; filename="{_safe_filename(import_file.file_name)}"'
+    return response

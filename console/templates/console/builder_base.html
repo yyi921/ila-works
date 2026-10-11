@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}iLA builder{% endblock %}</title>
+{% include "console/_theme.html" %}
+</head>
+<body>
+{% include "console/_header.html" with page="builder" can_build=True %}
+<main class="page">
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

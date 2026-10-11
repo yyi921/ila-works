@@ -1,0 +1,11 @@
+<header>
+  <nav>
+    <h1>iLA</h1>
+    <a href="{% url 'console:console' %}"{% if page == "console" %} class="current" aria-current="page"{% endif %}>Console</a>
+    {% if can_build %}<a href="{% url 'console:builder' %}"{% if page == "builder" %} class="current" aria-current="page"{% endif %}>Builder</a>{% endif %}
+  </nav>
+  <div class="right">
+    <span class="org" id="org">{% if organisation %}{{ organisation.name }}{% else %}No organisation connected{% endif %}</span>
+    <button type="button" class="toggle" id="theme" aria-pressed="false">Incognito</button>
+  </div>
+</header>

@@ -76,19 +76,95 @@ The requirements below define "done" for v1. Must-haves block launch; should-hav
 5. Superuser builder (requested 10 October 2026). A separate admin page where superusers configure iLA per organisation without code changes. Every change is audit-logged and can be reset to default.
    - **Command views.** Every built-in command keeps a default view. Superusers choose, for example, which figures `/status` shows, their order, the bills horizon and default measures and windows. Commands read these settings at run time.
    - **Custom measures.** Named groups of accounts (and optionally dimension values), e.g. *labour costs* = wages, super, payroll tax and workers' comp. A measure becomes a parameter in `/status`, `/pl` and `/compare` (`--labour`) and ties back to the P&L.
-   - **Shortcut commands.** Superusers define their own commands that expand to built-in ones, with optional placeholders, e.g. `/weekly` = `/status --revenue --gp --labour --mtd --ytd`, or `/supplier <name>` = `/compare --bill --supplier <name>`. Shortcuts appear in `/help` and autocomplete, can't reuse a built-in name, and are checked when saved so they only expand to valid commands.
+   - **Builder page and built commands (first version built 11 October 2026).** The builder is at `/console/builder/`, linked from the console's top bar. It is open to superusers and to users given "Can build custom commands"; it is scoped to the organisation in use, and every create, edit and delete is audit-logged with before and after.
+     - **Naming.** Every command made from a template or from scratch starts with `_` (`/_weekly`, or just `_weekly`), so it can never clash with or replace a native iLA command.
+     - **Start from scratch.** Runs up to 10 native commands in order and shows them as one report (`>>` saves every table). `{text}` and `{params}` pass on what is typed after the name, e.g. `/_supplier onemusic --Oct 2024 to Sep 2026` = `/compare --bill onemusic --Oct 2024 to Sep 2026`.
+     - **Checks on save.** Steps are checked when saved: native commands only, no `/use`, `/connect` or `/clean`, no `<<` or `>>` inside steps, and no built command calling another.
+     - **Where they appear.** Built commands appear in `/help`, `/help _name` and Tab completion, and can be switched off without deleting them.
+     - **Templates.** Templates are listed on the builder page; `_createInvoice` (item 9) is next.
 6. Exact bank reconciliation status. Xero's dashboard count of statement lines awaiting a match, and a true "reconciled to" date, need Xero's restricted Bank Statements Plus API, which requires Xero's approval. Apply as part of the certification work. Until then, `/status` and `/recon` show transactions entered in Xero but not reconciled. A fallback is `/recon << statement.csv`, which compares a bank statement export against Xero.
 7. `/compare` (requested 10 October 2026; first version built the same day: bills, invoices, accounts and P&L measures; custom measures follow the superuser builder). Month-by-month comparison to spot unusual bills, invoices or costs. The default is the last 12 complete months plus the current month to date; a period parameter overrides it.
    - **What to compare:** `--bill` or `--invoice`, narrowed by number (`--bill B-0042`), contact name (`--supplier Acme`, `--customer Smith`) or contact or account code. Given a bill or invoice number, it compares that document with the same contact's documents in earlier months.
    - **Measures:** `--revenue`, `--gp`, `--expenses` and any custom measure from the superuser builder (e.g. `--labour`); several may be combined.
    - **Output:** one row per month with the amount, change against the previous month (amount and %) and against the 12-month average, with large movements flagged. `--detail` breaks each month down by account or line. Results export with `>>` like any command.
 8. Choosing where `>>` saves (requested 10 October 2026). Today the browser saves to its download folder and any folder in the name is dropped. Three routes, in order: the `ila` terminal app writes to exact local paths (`>> C:\Month end\Oct\pl.xlsx`); output profiles save to cloud storage (OneDrive, SharePoint or Google Drive) for team folders, which also works on ila.works; Chrome and Edge can remember a chosen folder, with Downloads as the fallback in other browsers.
-9. On-charge check, `/recharge --event <code>` (requested 10 October 2026). Makes sure everything that should be charged on to the customer for an event (equipment hire, labour, first aid, cleaning, security and so on) has been invoiced. For each event, one row per chargeable category, with three columns of evidence: **expected** (from the contract or rate card), **cost** (bills, draft bills, purchase orders and timesheets for the event) and **charged** (invoice lines to the customer). Gaps are flagged: *cost but not charged*, *in the contract but not charged*, and *expected cost not billed yet*. Design for the three gaps in the data:
-   - **Bills not yet in Xero.** The check doesn't rely on bills alone. What should be charged comes from the contract or rate card, so a late bill can't hide a missing charge. Draft and awaiting-approval bills and purchase orders count as evidence here (unlike the P&L), and labour comes from timesheets (Deputy, UKG CSV). An event stays open, with a list of expected costs still to arrive, until it is signed off; re-run it after suppliers have billed (e.g. 30 days after the event).
-   - **Contracts not in Xero.** iLA holds the chargeable terms per event: `/contracts << event-contracts.xlsx` (event, category, how it's charged: included in the package, at cost, at a fixed rate or with a markup %, and the quoted amount), stored as attributes of the event's dimension value. A standard rate card per venue fills the gaps. Later, the LLM reads a contract PDF and drafts the rows for approval.
-   - **Bills not tagged to the event.** Run `/tag --dim event` first; the check uses confirmed tags and shows proposed ones with their confidence. It also lists untagged bills from chargeable accounts or suppliers dated in the event's window (bump-in to bump-out plus a few days) as "possibly this event", ready to tag.
-   - **Set-up (superuser builder).** A recharge map links each category to its cost accounts, suppliers or items and to its revenue accounts or item codes (e.g. First aid: cost account 4xx and supplier St John; revenue account 2xx or item FA).
-   - Depends on event tagging (item 9) and dimension attributes (built). `/compare --invoice --customer <name>` already helps spot a regular customer charge missing in a month.
+9. Invoice templates for events billing (replaces the `/recharge --event` design of 10 October; agreed 11 October 2026). Generic for any events business, so they fit TECC's process and companies with different processes and systems.
+   - **`/_createInvoice` (first template, renamed from `_billcheck` on 11 October).** Builds the customer invoice as an import file from the information fed to it, and lists questions to settle before approval.
+   - **Check mode (a later template).** Checks an existing draft or awaiting-approval invoice against the same information.
+   - **The core: Agreed, Incurred, Billed.** It is a three-way match, like purchase order, receipt and bill in accounts payable, applied to sales:
+     - **Agreed** is what the customer signed up to. At TECC that is the hire agreement and event order; elsewhere it may be a quote, a customer PO or a booking in a venue system.
+     - **Incurred** is what actually happened: supplier bills, timesheets and ticketing settlements.
+     - **Billed** is the draft invoice, with deposits and settlements applied.
+   - **The three checks:**
+     - (a) Billed against Agreed: rates, quantities, tax basis (GST inclusive or exclusive) and terms.
+     - (b) Agreed or Incurred but not Billed: revenue left on the table.
+     - (c) Every billed line carries the required details for later analysis: event tag, revenue account per item type, tax code and reference.
+   - **Settings per organisation, made in the builder (not code):**
+     - The event identifier: invoice reference, ticketing event code or job number.
+     - Agreed sources and Incurred sources.
+     - An item catalogue with aliases. For example, "Fire Warden" and "Fire Panel Monitor" are one item. Each item has a unit (flat, hour, day, % of receipts, per ticket), a pricing rule (fixed, rate × quantity, at cost, markup %, included in package), and a revenue account and tax code.
+     - Which document decides quantity. At TECC the event order beats the agreement's estimate, and supplier bills and timesheets beat the event order.
+     - The price basis, tolerances, and when the check runs. At TECC that is on the draft, before finance approves it.
+     - The output format.
+   - **Inputs.** The end goal is reading the invoice's attachments straight from Xero. This needs the read-only `accounting.attachments.read` permission. Draft and awaiting-approval invoices can already be read from Xero's Invoices API. The current `/compare` and `/inv` filter leaves them out, so these templates read them separately. Documents can also be pointed to with `<<`, from a local folder or a shared cloud drive. For this round, use synthetic documents only, saved locally or in Postgres.
+   - **Output: draft invoice as an import file.** Xero's sales invoice CSV import creates draft invoices, with account code, tax rate and tracking, so the event tag goes in at import. MYOB and QuickBooks also import invoices; confirm their formats when needed. Import files keep iLA read-only. Creating drafts directly through the API needs write permission and is a later decision.
+   - **Worked example (TECC, INV-2070; real documents kept out of git).** A manual check of the support files found the following:
+     - The agreement prices everything GST inclusive, but the invoice added GST on top: $3,303.23.
+     - The AV supplier's GST-inclusive cost was re-billed plus GST.
+     - Ushers were billed at the agreement's 24-hour estimate against 16 hours in the event order.
+     - First aid and security hours differ between documents.
+     - 64 promoter complimentary tickets were not charged at $0.50 each.
+     - There is no merchandise fee and no electrician question answered.
+     - There is a $1,000 gap between the support working and Xero payments.
+     - Contractor bills for security, first aid and cleaning were missing.
+     - The event is named four different ways across the documents.
+
+     The synthetic test set should reproduce each of these.
+   - **Where the set-up lives (agreed 11 October 2026; built).** An organisation can use several systems, and each system has its own import format and its own way of making invoices. These are linked to the organisation on its admin page (Organisation → Invoice set-ups):
+     - **Import format.** One per system, shared by every customer of that system. "Xero sales invoice CSV" is seeded with the 27 columns of the template downloaded from TECC and C&M, which are identical. A customised ERP gets a format of its own.
+     - **Invoice set-up.** One per organisation, system and kind of invoice, e.g. TECC "Event invoices", C&M "Labour hire". It holds:
+       - the import format;
+       - the tax basis (TECC's own invoices mix inclusive and exclusive);
+       - the date format, due days and branding theme;
+       - the default account and tax rate;
+       - the tracking category (Event or Job) and how the reference is written;
+       - the sources of billing information;
+       - the questions to ask before approval;
+       - free-text instructions.
+     - **Items.** Each set-up has items with name, aliases, unit (flat, hour, day, per head, each, %, at cost), rate, markup, account, tax rate and item code.
+     - **Import files.** Approved files are saved under Import files with their content and can be downloaded from the admin or the website. Downloads are members-only and audit-logged.
+   - **The two pilot cases.**
+     - **TECC.** Invoices are made from agreements, event orders, supplier bills and ticketing settlements.
+     - **C&M Steel.** The manager keeps timesheets and draft invoices on paper, someone else enters them in Xero, and who to email is agreed by phone. The invoice has one line per day ("Day Labour on 01 September", hours × $80), and the reference is the customer's job code.
+   - **The `/_createInvoice` dialogue (proposed 11 October 2026, to refine together).** Typing `/_createInvoice` starts a guided conversation in the console:
+     1. **Set-up.** Which invoice set-up, if the organisation has more than one.
+     2. **Customer.** Searches Xero contacts and shows the closest matches to pick from, or offers a new contact.
+     3. **Event or job.** Searches the tracking options and recent invoice references for the closest match.
+     4. **Billing information.** Asks for each source in the set-up (e.g. "Where is the hire agreement?", "Where are the timesheets?"). The user points to a local file with `<<`; Xero attachments and shared drives come later.
+     5. **Draft on screen.** iLA reads the files and maps what it finds to the set-up's items. The language model reads PDFs; spreadsheets and CSVs are read directly. Prices and totals are always calculated by iLA, not the model. The draft shows each line with its source, plus the set-up's questions and any gaps found, e.g. a $0 line or the tax basis.
+     6. **Tweaks.** The user changes the draft in plain English or line by line ("security 24 hours", "remove catering") for as many rounds as needed. Each round shows what changed.
+     7. **Approval.** iLA first checks the draft against the organisation's Xero data: contact, account codes, tax rates and tracking options. The import file is then built, saved under Import files with its hash, and offered for download, and the approval is audit-logged.
+
+     While the dialogue is open, typing without `/` answers its current question; `/cancel` ends it. Drafts are saved so they can be resumed.
+   - **First version built (11 October 2026, branch `command-builder`).** The dialogue above works end to end:
+     - **Customer:** Xero contact search, or a new customer.
+     - **Event:** suggestions from the customer's recent invoice references, matched against the set-up's tracking category.
+     - **Billing information:** files with `<<` (PDF, Excel, CSV, text, images; several at once), or details typed in, e.g. C&M's hours.
+     - **Reading:** the language model reads each file into billing facts (Claude API, `ANTHROPIC_API_KEY`, model `claude-sonnet-5-5`), then proposes lines and questions.
+     - **Coding and amounts:** iLA codes each line from the item list, then from how the same description was coded on recent invoices, then from the set-up default. It calculates amounts and GST on the set-up's tax basis and flags $0 lines, lines not in the item list and rates that differ from the item list.
+     - **Payments:** deposits and settlements are shown as payments to apply, not as invoice lines.
+     - **Tweaks:** in plain English, with a list of changes each round.
+     - **Approval:** blocks on a used invoice number, an inactive account or tax rate, or an unknown tracking option. The import file is built, stamped (SHA-256) and saved under Import files with a download link, and the approval is audit-logged.
+   - **Decisions (11 October 2026).**
+     - Source documents should in time be stored with the import file as evidence. For the November version the current rule stays: uploads are read and discarded, and only the extracted facts are kept in the draft.
+     - The user approved testing with TECC's real INV-2070 documents locally, comparing the iLA import against the original invoice.
+   - **Test import (11 October 2026).** `python manage.py sample_invoice_file --organisation "Demo Company (AU)" --email <address>` builds two synthetic invoices. The import into Demo Company will confirm three things:
+     - Discount is a percentage: ILA-TEST-001's venue line shows 4,950.00 if it is a percentage, 9,850.00 if it is an amount.
+     - Which tax basis the import screen offers.
+     - That invoices land as drafts. It also checks what EmailAddress does: does it update the contact, and does Xero email anything automatically?
+
+     1. Builder page first, for approval. Built 11 October: start-from-scratch commands, with `_createInvoice` shown as planned.
+     2. Confirm the Xero import format, then build `_createInvoice` (first version built 11 October; test on TECC INV-2070 next).
 
 **Non-functional**
 
@@ -204,7 +280,12 @@ Features are built by 1 November, tested in week 5 and hardened in week 6; pilot
 **Weekly plan**
 
 1. **Week 1 (5–11 Oct): foundations and Xero connector.** Resolve the employment IP question. Register the Xero developer account under AFIS and create the app on Starter. New repository, Django scaffold, Postgres, Australian hosting, CI with tests. Synthetic hospitality dataset loaded into the Xero demo company. Xero OAuth with offline\_access, connect and disconnect screens, organisation name and status; initial and incremental sync of all v1 objects, rate-limit queue, sync log. First five pilot invitations sent.
-2. **Week 2 (12–18 Oct): console, search and reports.** Command parser, autocomplete and help. `/find`, `/bal`, `/debtors`, `/inv`, `/pl`, `/tb`, `>>` export (most of these built 10 October 2026). Full-text search index. Add-on: an `ila` terminal shell (Python, prompt\_toolkit) calling the same API, with persistent history, up/down arrows, Ctrl+R search, autocomplete, and `?` for plain-English questions that draft a command for approval. The web console stays the focus; the shell is for power users.
+2. **Week 2 (12–18 Oct): console, search, reports and the first built commands.** Agreed 11 October 2026:
+   - `/_createInvoice` from timesheets (C&M Steel's labour hire case: hours per day × rate, one line per day, customer job code as reference, send-to contacts).
+   - Then new templates and commands: `_checkBill` (check a drafted or awaiting-approval invoice against agreements, orders and costs — the check mode split from billcheck), `_recFA` and `_tagEvent` (scope to confirm at the start of the week).
+   - Native commands are listed in the admin (Console → Native commands, refreshed from code on every migrate, with editable how-to notes).
+
+   Original plan for this week: Command parser, autocomplete and help. `/find`, `/bal`, `/debtors`, `/inv`, `/pl`, `/tb`, `>>` export (most of these built 10 October 2026). Full-text search index. Add-on: an `ila` terminal shell (Python, prompt\_toolkit) calling the same API, with persistent history, up/down arrows, Ctrl+R search, autocomplete, and `?` for plain-English questions that draft a command for approval. The web console stays the focus; the shell is for power users.
 3. **Week 3 (19–25 Oct): tracking-category tagging.** Dimension setup (event calendar, department codes), attribution rules for bills, labour and receipts, confidence levels, review queue, overrides, `/pl --by <dimension>` with the tie-out row.
 4. **Week 4 (26 Oct–1 Nov): journal files and stamping.** Output profiles, validation rules, file builder, open-after-build, register, `/stamp` with hash, `/files --pending`, `/posted`.
 5. **Week 5 (2–8 Nov): testing and pilot follow-up.** End-to-end testing of every feature built in October on the demo company and synthetic data, defect fixes, tie-out checks on the event and department P&L. Follow-up conversations with the five pilot prospects to confirm start dates, data (event calendars, department codes) and Xero access.

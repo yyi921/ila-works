@@ -644,6 +644,11 @@ class ImportFile(TenantModel):
     )
     posted_at = models.DateTimeField(null=True, blank=True)
     rejected_reason = models.TextField(blank=True)
+    # The file itself, kept so it can be downloaded again and its stamp re-checked. Import files are small.
+    content = models.BinaryField(null=True, blank=True, editable=False)
+    content_type = models.CharField(max_length=100, blank=True)
+    invoice_setup = models.ForeignKey("InvoiceSetup", null=True, blank=True, on_delete=models.SET_NULL,
+                                      related_name="files")
 
     class Meta(TenantModel.Meta):
         indexes = [models.Index(fields=["organisation", "status"])]
@@ -668,6 +673,125 @@ class ImportFile(TenantModel):
         return bool(self.sha256) and self.hash_bytes(content) == self.sha256
 
 
+# --- Invoice set-up ---------------------------------------------------------------------------------------------
+
+class ImportFormat(models.Model):
+    """The layout a target system accepts for importing a document, e.g. Xero's sales invoice CSV. Shared by every
+    organisation using that system; an organisation with a customised system gets a format of its own."""
+
+    class DocumentType(models.TextChoices):
+        SALES_INVOICE = "sales_invoice", "Sales invoice"
+
+    name = models.CharField(max_length=100, unique=True)
+    system = models.CharField(max_length=20, choices=SourceSystem.choices)
+    document_type = models.CharField(max_length=30, choices=DocumentType.choices, default=DocumentType.SALES_INVOICE)
+    columns = models.JSONField(
+        default=list, help_text='Columns in file order: [{"name": "*ContactName", "field": "contact_name"}, ...]. '
+                                'A leading * marks a column the system requires.')
+    file_type = models.CharField(max_length=10, default="csv")
+    notes = models.TextField(blank=True, help_text="How the system reads the file: date format, grouping, limits.")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["system", "name"]
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def headers(self):
+        return [c["name"] for c in self.columns]
+
+    @property
+    def required_fields(self):
+        return [c["field"] for c in self.columns if c["name"].startswith("*")]
+
+
+class InvoiceSetup(TenantModel):
+    """How one organisation creates customer invoices in one of its systems: the import format, defaults, the
+    items it bills, where the billing information comes from and what to ask before approval. Read by
+    /_createInvoice."""
+
+    class DateFormat(models.TextChoices):
+        DAY_FIRST = "%d/%m/%Y", "Day first (31/10/2026)"
+        MONTH_FIRST = "%m/%d/%Y", "Month first (10/31/2026)"
+        ISO = "%Y-%m-%d", "ISO (2026-10-31)"
+
+    name = models.CharField(max_length=100, help_text='e.g. "Event invoices" or "Labour hire invoices".')
+    system = models.CharField(max_length=20, choices=SourceSystem.choices, default=SourceSystem.XERO)
+    import_format = models.ForeignKey(ImportFormat, on_delete=models.PROTECT, related_name="setups")
+    tax_basis = models.CharField(max_length=20, choices=LineAmountType.choices, default=LineAmountType.EXCLUSIVE,
+                                 help_text="Whether prices are entered including or excluding tax. Choose the same "
+                                           "on the system's import screen.")
+    date_format = models.CharField(max_length=20, choices=DateFormat.choices, default=DateFormat.DAY_FIRST,
+                                   help_text="Must match the organisation's region in the system.")
+    due_days = models.PositiveIntegerField(default=14, help_text="Due date = invoice date + this many days.")
+    branding_theme = models.CharField(max_length=100, blank=True)
+    default_account_code = models.CharField(max_length=20, blank=True)
+    default_tax_type = models.CharField(max_length=100, blank=True, help_text='As named in the system, e.g. "GST on Income".')
+    tracking_name = models.CharField(max_length=100, blank=True,
+                                     help_text="Tracking category each line is tagged to, e.g. Event or Job.")
+    reference_pattern = models.CharField(max_length=200, blank=True,
+                                         help_text='How the reference is written, e.g. "{event} - {event_date}" or "{customer_job}".')
+    sources = models.TextField(blank=True, help_text="Where billing information comes from, one per line, e.g. "
+                                                     "hire agreement, event order, supplier bills, timesheets.")
+    questions = models.TextField(blank=True, help_text="Questions to ask before approval, one per line.")
+    instructions = models.TextField(blank=True, help_text="Anything else /_createInvoice should know about how "
+                                                          "this organisation bills.")
+    is_active = models.BooleanField(default=True)
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.UniqueConstraint(fields=["organisation", "system", "name"], name="core_invoicesetup_name_uniq"),
+        ]
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.get_system_display()})"
+
+    def clean(self):
+        if self.import_format_id and self.import_format.system != self.system:
+            raise ValidationError({"import_format": "Choose a format for the same system."})
+
+
+class InvoiceItem(TenantModel):
+    """Something the organisation bills, with how it is priced and coded."""
+
+    class Unit(models.TextChoices):
+        FLAT = "flat", "Flat fee"
+        HOUR = "hour", "Per hour"
+        DAY = "day", "Per day"
+        HEAD = "head", "Per head"
+        EACH = "each", "Each"
+        PERCENT = "percent", "% of an amount"
+        AT_COST = "at_cost", "At cost (from supplier bill)"
+
+    setup = models.ForeignKey(InvoiceSetup, on_delete=models.CASCADE, related_name="items")
+    name = models.CharField(max_length=200, help_text="As it should appear on the invoice.")
+    aliases = models.CharField(max_length=500, blank=True,
+                               help_text='Other names in source documents, comma separated, e.g. "Fire Warden".')
+    unit = models.CharField(max_length=20, choices=Unit.choices, default=Unit.FLAT)
+    rate = models.DecimalField(null=True, blank=True, **MONEY, help_text="Standard rate; leave blank if it varies.")
+    markup_percent = models.DecimalField(null=True, blank=True, max_digits=7, decimal_places=2)
+    account_code = models.CharField(max_length=20, blank=True, help_text="Blank = the set-up's default.")
+    tax_type = models.CharField(max_length=100, blank=True, help_text="Blank = the set-up's default.")
+    item_code = models.CharField(max_length=50, blank=True, help_text="The system's inventory item code, if used.")
+    notes = models.CharField(max_length=500, blank=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta(TenantModel.Meta):
+        ordering = ["sort_order", "name"]
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        self.organisation_id = self.setup.organisation_id
+        super().save(*args, **kwargs)
+
+
 class AuditLog(TenantModel):
     """Append-only log of every command, approval, stamp and override."""
 
@@ -679,6 +803,8 @@ class AuditLog(TenantModel):
         CONNECT = "connect", "Connect"
         DISCONNECT = "disconnect", "Disconnect"
         SYNC = "sync", "Sync"
+        BUILD = "build", "Builder change"
+        DOWNLOAD = "download", "File download"
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     action = models.CharField(max_length=20, choices=Action.choices)

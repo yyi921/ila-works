@@ -8,6 +8,7 @@ from django.urls import reverse
 
 from xero.api import XeroScopeMissing
 
+from .builder import active_commands
 from .output import DATE, MONEY, NUMBER, PCT, TEXT, Column, Figure, Figures, Note, Result, Table
 from .output import fmt_money as _m
 from .periods import Period, add_months, fmt, month_period, window
@@ -964,10 +965,39 @@ def clean(ctx, cmd):
     return Result("Nothing to clear", subtitle="/clean clears the results shown in the console page.")
 
 
+@command("cancel", summary="Drop your open /_createInvoice draft. Nothing is written anywhere.", usage="/cancel",
+         examples=["/cancel"], needs_source=False)
+def cancel(ctx, cmd):
+    read_params(cmd, ctx)
+    from .create_invoice import cancel as cancel_draft
+
+    return cancel_draft(ctx)
+
+
 @command("help", summary="List commands, or show how to use one: /help status.", usage="/help [command]",
          examples=["/help", "/help status"], aliases=("?",), needs_source=False)
 def help_(ctx, cmd):
     read_params(cmd, ctx)
+    built = active_commands(ctx.organisation)
+    if cmd.text.lstrip("/").startswith("_"):
+        custom = next((c for c in built if c.name.lower() == cmd.text.lstrip("/").lower()), None)
+        if custom is None:
+            raise CommandError(f"There's no /{cmd.text.lstrip('/')} command. Type /help to see them all.")
+        result = Result(f"/{custom.name}", subtitle=custom.summary)
+        if custom.template == "createinvoice":
+            result.add(Note(f"Usage: /{custom.name} [customer] [--new]. A guided conversation: customer, event or "
+                            "job, billing information (files with << or typed details), a draft on screen, changes "
+                            "in plain English, then approve to build the import file. Plain answers (no /) go to "
+                            "your open draft; /cancel drops it."))
+            return result
+        result.add(Note(f"Built in the builder ({custom.get_template_display()}). It runs:"))
+        table = result.add(Table([Column("Step", NUMBER), Column("Command")]))
+        for number, step in enumerate(custom.steps, 1):
+            table.add(number, step)
+        joined = "\n".join(custom.steps)
+        if "{text}" in joined or "{params}" in joined:
+            result.add(Note("{text} is replaced by what you type after the name, {params} by your -- parameters."))
+        return result
     if cmd.text:
         spec = lookup(cmd.text.lstrip("/").lower())
         if spec is None:
@@ -988,4 +1018,9 @@ def help_(ctx, cmd):
     table = result.add(Table([Column("Command"), Column("What it does")]))
     for spec in COMMANDS.values():
         table.add(spec.usage, spec.summary)
+    if built:
+        own = result.add(Table([Column("Command"), Column("What it does")],
+                               title=f"{ctx.organisation.name}'s own commands"))
+        for custom in built:
+            own.add(f"/{custom.name}", custom.summary)
     return result

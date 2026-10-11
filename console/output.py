@@ -104,13 +104,14 @@ class Result:
     blocks: list = field(default_factory=list)
     subtitle: str = ""
     link: str = ""
+    link_text: str = ""
 
     def add(self, block):
         self.blocks.append(block)
         return block
 
     def to_json(self):
-        return {"title": self.title, "subtitle": self.subtitle, "link": self.link,
+        return {"title": self.title, "subtitle": self.subtitle, "link": self.link, "link_text": self.link_text,
                 "blocks": [b.to_json() for b in self.blocks]}
 
     def tables(self):
