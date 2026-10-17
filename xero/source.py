@@ -354,6 +354,40 @@ class XeroSource:
                                     "active": t.get("Status") == "ACTIVE"}
                 for t in self.client.get("TaxRates", cache_seconds=3600).get("TaxRates", [])}
 
+    # --- Raw transactions, for copying into iLA (xero.sync) ---
+
+    SYNC_CACHE_SECONDS = 60
+
+    def _period_pages(self, path, collection, start, end):
+        """Every record of ``path`` dated ``start`` to ``end`` (both included). Xero returns 100 per page, line
+        items included, so a short page is the last."""
+        where = (f"Date>=DateTime({start.year},{start.month:02d},{start.day:02d}) AND "
+                 f"Date<=DateTime({end.year},{end.month:02d},{end.day:02d})")
+        rows, page = [], 1
+        while True:
+            batch = self.client.get(path, {"where": where, "page": page},
+                                    cache_seconds=self.SYNC_CACHE_SECONDS).get(collection, [])
+            rows += batch
+            if len(batch) < 100:
+                return rows
+            page += 1
+
+    def raw_invoices(self, start, end):
+        """Sales invoices and bills (Xero's Invoices, types ACCREC and ACCPAY) in the period, any status."""
+        return self._period_pages("Invoices", "Invoices", start, end)
+
+    def raw_credit_notes(self, start, end):
+        return self._period_pages("CreditNotes", "CreditNotes", start, end)
+
+    def raw_bank_transactions(self, start, end):
+        return self._period_pages("BankTransactions", "BankTransactions", start, end)
+
+    def raw_manual_journals(self, start, end):
+        return self._period_pages("ManualJournals", "ManualJournals", start, end)
+
+    def raw_accounts(self):
+        return self.client.get("Accounts", cache_seconds=3600).get("Accounts", [])
+
     def tracking_categories(self):
         """Active tracking categories: {name: [active option names]}."""
         return {c.get("Name", ""): [o.get("Name", "") for o in c.get("Options", []) if o.get("Status") == "ACTIVE"]
@@ -362,10 +396,12 @@ class XeroSource:
 
     def tracking_category_list(self):
         """Every tracking category, archived ones included, with all its options and their status:
-        [{"name", "status", "options": [{"name", "status"}]}]."""
+        [{"id", "name", "status", "options": [{"id", "name", "status"}]}]."""
         data = self.client.get("TrackingCategories", {"includeArchived": "true"}, cache_seconds=300)
-        return [{"name": c.get("Name", ""), "status": c.get("Status", "").title(),
-                 "options": [{"name": o.get("Name", ""), "status": o.get("Status", "").title()}
+        return [{"id": c.get("TrackingCategoryID", ""), "name": c.get("Name", ""),
+                 "status": c.get("Status", "").title(),
+                 "options": [{"id": o.get("TrackingOptionID", ""), "name": o.get("Name", ""),
+                              "status": o.get("Status", "").title()}
                              for o in c.get("Options", [])]}
                 for c in data.get("TrackingCategories", [])]
 

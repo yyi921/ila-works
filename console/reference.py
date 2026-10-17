@@ -9,7 +9,9 @@ HOW_TO = {
               "items). Add a period and a measure to compare with budget and last year, e.g. /status --September "
               "2026 --revenue --mtd.",
     "pl": "Profit and loss by account against budget and last year. Default is this month; give a period or "
-          "--ytd. Add >> pl.xlsx to save it for a pack.",
+          "--ytd. Add >> pl.xlsx to save it for a pack. "
+          "/pl --event (or --by <dimension>) gives a column per event, Unassigned, and a check against Xero; Xero "
+          "tracking and tags approved in /tag count together.",
     "bs": "Balance sheet as at today, or --as at 30/06/2026 for a month or year end.",
     "tb": "Trial balance for tie-outs and audit files, as at today or --as at a date. Save with >> tb.xlsx.",
     "cash": "Bank balances now or as at a date. Quick check before a payment run.",
@@ -29,11 +31,21 @@ HOW_TO = {
     "dim": "See what you can tag by before tagging: Xero's tracking categories (Xero allows 2 active and 4 in all) "
            "and iLA's own dimensions, which have no limit and never change Xero. /dim event lists a category's "
            "options and a dimension's values with their extra fields (e.g. venue, event date).",
+    "tag": "Tag transactions to a dimension value, e.g. bills and invoices to events. Choose the types and period "
+           "(both dates included), narrow with filters (--desc, --contact, --account, --amount, --xero, "
+           "--attachment), then either --to one value or let iLA propose one per transaction from Xero tracking, "
+           "codes and names in the text, contacts and event dates. Check the preview and approve all, by "
+           "confidence or by row. Xero isn't changed.",
+    "createtag": "Set up something to tag by from a CSV of its values. Pick a Xero tracking category to replace "
+                 "(iLA then shows your names and details instead of codes like CCH1221; Xero isn't changed), an iLA "
+                 "dimension to update, or a brand-new one. Download the starting file, fill in Code, Name, "
+                 "Description and any extra columns (Venue, Event date…), choose it with <<, check the preview and "
+                 "type approve.",
     "orgs": "List the organisations you can use; * marks the current one.",
     "use": "Switch organisation, e.g. /use TECC. Commands then read that organisation.",
     "connect": "Connect or reconnect Xero. Also grants any new permissions iLA needs (it will say when).",
     "clean": "Clear the results on screen. Your command history (up arrow) is kept.",
-    "cancel": "Drop your open /_createInvoice draft. Nothing is written anywhere.",
+    "cancel": "Drop your open /tag preview, /createTag or /_createInvoice draft. Nothing is saved or written anywhere.",
     "help": "List every command (including your organisation's built ones), or /help <command> for its options.",
 }
 

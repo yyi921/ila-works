@@ -277,10 +277,12 @@ def route(path, params):
             {"Name": "GST Free Income", "TaxType": "EXEMPTOUTPUT", "EffectiveRate": "0.0000", "Status": "ACTIVE"},
             {"Name": "Old Rate", "TaxType": "OLD", "EffectiveRate": "5.0000", "Status": "DELETED"}]}
     if path == "TrackingCategories":
-        return {"TrackingCategories": [{"Name": "Event", "Status": "ACTIVE", "Options": [
-            {"Name": "Celtic Nights", "Status": "ACTIVE"}, {"Name": "Gala Dinner", "Status": "ACTIVE"},
-            {"Name": "Old Show", "Status": "ARCHIVED"}]}]
-            + ([{"Name": "Region", "Status": "ARCHIVED", "Options": [{"Name": "North", "Status": "ACTIVE"}]}]
+        return {"TrackingCategories": [{"TrackingCategoryID": "tc-event", "Name": "Event", "Status": "ACTIVE", "Options": [
+            {"TrackingOptionID": "to-cn", "Name": "Celtic Nights", "Status": "ACTIVE"},
+            {"TrackingOptionID": "to-gd", "Name": "Gala Dinner", "Status": "ACTIVE"},
+            {"TrackingOptionID": "to-os", "Name": "Old Show", "Status": "ARCHIVED"}]}]
+            + ([{"TrackingCategoryID": "tc-region", "Name": "Region", "Status": "ARCHIVED", "Options": [
+                {"TrackingOptionID": "to-north", "Name": "North", "Status": "ACTIVE"}]}]
                if params.get("includeArchived") == "true" else [])}
     raise AssertionError(f"unexpected call {path} {params}")
 

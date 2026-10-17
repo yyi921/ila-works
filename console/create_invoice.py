@@ -80,7 +80,7 @@ def start(ctx, cmd, custom):
 def cancel(ctx):
     draft = open_draft(ctx)
     if draft is None:
-        return Result("Nothing to cancel", subtitle="There's no open invoice draft.")
+        return Result("Nothing to cancel", subtitle="There's no open /tag preview, /createTag or invoice draft.")
     draft.status = InvoiceDraft.Status.CANCELLED
     draft.save()
     return Result("Draft cancelled", subtitle=f"{_customer_name(draft) or 'The draft'} was dropped. Nothing was "
