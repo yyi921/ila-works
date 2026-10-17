@@ -16,6 +16,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
+from django.db.models.functions import Lower
 from django.utils import timezone
 
 MONEY = {"max_digits": 19, "decimal_places": 2}
@@ -180,6 +181,7 @@ class Document(TenantModel):
     amount_due = models.DecimalField(default=0, **MONEY)
     amount_paid = models.DecimalField(default=0, **MONEY)
     amount_credited = models.DecimalField(default=0, **MONEY)
+    has_attachments = models.BooleanField(default=False)
 
     class Meta(TenantModel.Meta):
         indexes = [
@@ -240,6 +242,7 @@ class BankTransaction(TenantModel):
     subtotal = models.DecimalField(default=0, **MONEY)
     total_tax = models.DecimalField(default=0, **MONEY)
     total = models.DecimalField(default=0, **MONEY)
+    has_attachments = models.BooleanField(default=False)
 
     class Meta(TenantModel.Meta):
         indexes = [models.Index(fields=["organisation", "date"])]
@@ -268,6 +271,7 @@ class Journal(TenantModel):
     narration = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=Status.choices)
     line_amount_type = models.CharField(max_length=20, choices=LineAmountType.choices, blank=True)
+    has_attachments = models.BooleanField(default=False)
 
     class Meta(TenantModel.Meta):
         indexes = [models.Index(fields=["organisation", "date"])]
@@ -312,6 +316,16 @@ class Dimension(TenantModel):
         TrackingCategory, null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
         help_text="Source tracking category this dimension was imported from, if any.",
     )
+    replaces_source = models.BooleanField(
+        "replaces a category in the accounting system", default=False,
+        help_text="Tick when this dimension stands in for one the accounting system already has (e.g. Xero's "
+                  "Event tracking): iLA shows your names and details instead of the system's codes. The accounting "
+                  "system itself isn't changed.",
+    )
+    source_name = models.CharField(
+        "name in the accounting system", max_length=100, blank=True,
+        help_text="What the accounting system calls it, e.g. Events Department. Needed when it replaces one.",
+    )
     attribute_fields = models.JSONField(
         default=list, blank=True,
         help_text='Customer-defined fields for this dimension\'s values: a list of {"key", "label", "type", '
@@ -321,7 +335,9 @@ class Dimension(TenantModel):
 
     class Meta(TenantModel.Meta):
         constraints = TenantModel.Meta.constraints + [
-            models.UniqueConstraint(fields=["organisation", "code"], name="core_dimension_code_uniq")
+            # Codes are unique ignoring case: "Event" and "event" can't both exist.
+            models.UniqueConstraint("organisation", Lower("code"), name="core_dimension_code_uniq",
+                                    violation_error_message="Another dimension already uses this code.")
         ]
 
     def __str__(self):
@@ -341,6 +357,8 @@ class Dimension(TenantModel):
             if spec.get("type", "text") not in self.AttributeType.values:
                 raise ValidationError({"attribute_fields": f"Field {key!r} has unknown type {spec.get('type')!r}."})
             keys.add(key)
+        if self.replaces_source and not self.source_name.strip():
+            raise ValidationError({"source_name": "Say what the accounting system calls the category it replaces."})
 
 
 def _attribute_ok(kind, value):
@@ -361,6 +379,7 @@ class DimensionValue(TenantModel):
     dimension = models.ForeignKey(Dimension, on_delete=models.CASCADE, related_name="values")
     code = models.CharField(max_length=100)
     name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
     tracking_option = models.ForeignKey(
         TrackingOption, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
@@ -370,7 +389,8 @@ class DimensionValue(TenantModel):
 
     class Meta(TenantModel.Meta):
         constraints = TenantModel.Meta.constraints + [
-            models.UniqueConstraint(fields=["dimension", "code"], name="core_dimensionvalue_code_uniq")
+            models.UniqueConstraint("dimension", Lower("code"), name="core_dimensionvalue_code_uniq",
+                                    violation_error_message="Another value in this dimension already uses this code.")
         ]
 
     def __str__(self):

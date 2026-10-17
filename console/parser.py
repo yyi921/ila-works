@@ -11,6 +11,7 @@ parameter after whitespace, so values like "INV--001" survive. ``<<`` names an i
 import re
 from dataclasses import dataclass, field
 
+CHOSEN_FILE = "the file"
 _MARKERS = re.compile(r"(\s--|<<|>>)")
 
 
@@ -60,9 +61,8 @@ def parse(line):
         elif marker == "<<":
             if cmd.input_file:
                 raise CommandSyntaxError("Only one input file (<<) per command.")
-            if not value:
-                raise CommandSyntaxError('Name the input file after "<<".')
-            cmd.input_file = _unquote(value)
+            # The file picker supplies the file, so a bare "<<" is fine: the name is only a label.
+            cmd.input_file = _unquote(value) or CHOSEN_FILE
         else:
             if cmd.output_file:
                 raise CommandSyntaxError("Only one output file (>>) per command.")

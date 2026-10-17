@@ -7,7 +7,7 @@ from decimal import Decimal
 from django.db.models import Count, Q
 from django.urls import reverse
 
-from core.models import Dimension
+from core.models import Dimension, Organisation
 from xero.api import XeroAPIError, XeroScopeMissing
 
 from .builder import active_commands
@@ -202,15 +202,41 @@ def _budget_missing_reason(src):
 
 @command(
     "pl",
-    summary="Profit and loss by account, against budget and last year.",
-    usage="/pl [--<period>] [--mtd|--qtd|--ytd] [>> file.xlsx]",
-    params=[("--<period>", "Defaults to this month to date"), ("--mtd --qtd --ytd", "To-date window (pick one)")],
-    examples=["/pl", "/pl --September 2026", "/pl --ytd >> pl-ytd.xlsx", "/pl --Jul 2026 to Sep 2026"],
+    summary="Profit and loss by account, against budget and last year; or by event (any iLA dimension) with "
+            "Unassigned and a check against Xero.",
+    usage="/pl [--<period>] [--mtd|--qtd|--ytd] [--by <dimension> | --<dimension>] [>> file.xlsx]",
+    params=[("--<period>", "Defaults to this month to date"), ("--mtd --qtd --ytd", "To-date window (pick one)"),
+            ("--by <dimension>  or  --<dimension>", "A column per value, e.g. --by event or just --event. Xero "
+                                                    "tracking and iLA tags count together.")],
+    examples=["/pl", "/pl --September 2026", "/pl --ytd >> pl-ytd.xlsx", "/pl --Jul 2026 to Sep 2026",
+              "/pl --event --Sep 2026", "/pl --by event --FY2027 >> events.xlsx"],
     aliases=("p&l", "profit"),
 )
 def pl(ctx, cmd):
-    params = read_params(cmd, ctx, flags=set(WINDOWS), period=True, exclusive=[WINDOWS])
+    dimensions = {}
+    if isinstance(ctx.organisation, Organisation):
+        for d in Dimension.objects.filter(organisation=ctx.organisation, is_active=True):
+            dimensions.setdefault(d.code.lower(), d)
+            dimensions.setdefault(d.name.lower(), d)
+    if cmd.text.startswith("-"):
+        raise CommandError(f'Use two dashes: /pl --{cmd.text.lstrip("-")}')
+    params = read_params(cmd, ctx, flags=set(WINDOWS) | (set(dimensions) - set(WINDOWS)), period=True,
+                         exclusive=[WINDOWS], keyed={"by": lambda value, _: value.strip()})
+    chosen = [dimensions[f] for f in params.flags if f in dimensions]
+    if "by" in params.values:
+        wanted = params.values["by"].lower()
+        if wanted not in dimensions:
+            raise CommandError(f'No iLA dimension called "{params.values["by"]}". Yours: '
+                               + (", ".join(sorted({d.name for d in dimensions.values()})) or "none yet (see "
+                                  "/createTag)") + ".")
+        chosen.append(dimensions[wanted])
+    if len({d.pk for d in chosen}) > 1:
+        raise CommandError("Report by one dimension at a time.")
     period = _periods(params, ctx)[0]
+    if chosen:
+        from .pl_by_dimension import report
+
+        return report(ctx, chosen[0], period)
     src = ctx.source
     accounts = src.accounts()
     current, last_year = src.profit_and_loss(period.start, period.end, with_last_year=True)
@@ -1021,6 +1047,54 @@ def _attr(value):
     return "" if value is None else str(value)
 
 
+@command(
+    "tag",
+    summary="Tag invoices, bills, credit notes, bank transactions or journals to a value of an iLA dimension, "
+            "e.g. events. Preview first; nothing is tagged until you approve.",
+    usage="/tag --dim <dimension> --invoices|--bills|--credits|--bank|--journals|--all --<period> [--desc <text>] "
+          "[--contact <name>] [--account <code or name>] [--amount <range>] [--xero <category> [<option>]] "
+          "[--attachment] [--retag] [--to <value>] [--window <days>]",
+    params=[("--dim <dimension>", "The iLA dimension to tag to (not needed if you have only one)."),
+            ("--invoices --bills --credits --bank --journals", "What to tag; any of them. --all for every type. "
+                                                               "Journals are manual journals."),
+            ("--<period>", "Mar 2026, last month, Jul 2026 to Sep 2026. Both end dates are included."),
+            ("--desc <text>", "Description, reference or number contains it; ABBA or Bjorn for either."),
+            ("--contact <name>", "The contact's name contains it."),
+            ("--account <code or name>", "Only lines on these accounts (default: P&L lines)."),
+            ("--amount <range>", ">1000, <500, 500 to 5000 or 1200 (the P&L amount)."),
+            ("--xero <category> [<option>]", "Only lines Xero already tracks in that category (and option)."),
+            ("--attachment", "Only transactions with a file attached in Xero."),
+            ("--retag", "Include transactions already tagged in the dimension."),
+            ("--to <value>", "Tag every match to this value (code or name) instead of proposals."),
+            ("--window <days>", "How far either side of a value's dates still counts as fitting (default 3).")],
+    examples=["/tag --dim event --bills --invoices --Mar 2026",
+              "/tag --dim event --all --Jul 2026 to Sep 2026 --desc ABBA --to 260328ABB",
+              "/tag --dim event --bills --last month --contact Ticketek --amount >500",
+              "/tag --dim event --journals --FY2026 --xero Event --retag"],
+)
+def tag(ctx, cmd):
+    from .tag_run import start
+
+    return start(ctx, cmd)
+
+
+@command(
+    "createtag", needs_source=False, takes_input=True,
+    summary="Set up a dimension to tag by from a CSV of its values: brand new, or replacing a Xero tracking "
+            "category so iLA shows names instead of codes.",
+    usage="/createTag [<name>] [--new] [<< values.csv]",
+    params=[("<name>", "The Xero tracking category or iLA dimension to set up, or the name of a new one."),
+            ("--new", "Drop the open /createTag draft and start again."),
+            ("<< values.csv", "The values file. With a name, iLA keeps that name and goes straight to the preview.")],
+    examples=["/createTag", "/createTag Event", "/createTag Event << events.csv", "/createTag Venue"],
+)
+def createtag(ctx, cmd):
+    params = read_params(cmd, ctx, flags=("new",))
+    from .create_tag import start
+
+    return start(ctx, cmd, params)
+
+
 @command("orgs", summary="List your organisations; * marks the one in use.", examples=["/orgs"], needs_source=False)
 def orgs(ctx, cmd):
     read_params(cmd, ctx)
@@ -1075,13 +1149,15 @@ def clean(ctx, cmd):
     return Result("Nothing to clear", subtitle="/clean clears the results shown in the console page.")
 
 
-@command("cancel", summary="Drop your open /_createInvoice draft. Nothing is written anywhere.", usage="/cancel",
-         examples=["/cancel"], needs_source=False)
+@command("cancel", summary="Drop your open /tag preview, /createTag or /_createInvoice draft. Nothing is saved.",
+         usage="/cancel", examples=["/cancel"], needs_source=False)
 def cancel(ctx, cmd):
     read_params(cmd, ctx)
-    from .create_invoice import cancel as cancel_draft
+    from . import create_invoice
+    from .dialogues import open_dialogue
 
-    return cancel_draft(ctx)
+    module, _ = open_dialogue(ctx)
+    return (module or create_invoice).cancel(ctx)
 
 
 @command("help", summary="List commands, or show how to use one: /help status.", usage="/help [command]",

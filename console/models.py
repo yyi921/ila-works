@@ -72,6 +72,59 @@ class InvoiceDraft(TenantModel):
         return f"Invoice draft {self.pk} {customer} ({self.get_status_display()})"
 
 
+class TagDraft(TenantModel):
+    """A /createTag conversation: which dimension it creates or updates, and the values read from the user's CSV,
+    saved after every answer so it can be resumed. ``data`` holds the target (a Xero tracking category to replace,
+    an iLA dimension to update, or a new one), the name, the rows and fields read from the file, problems and
+    warnings, and the numbered choices last offered. Nothing is saved to the dimension until it is approved."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        APPROVED = "approved", "Approved"
+        CANCELLED = "cancelled", "Cancelled"
+
+    class Step(models.TextChoices):
+        TARGET = "target", "New or replace"
+        NAME = "name", "Name"
+        FILE = "file", "Values file"
+        REVIEW = "review", "Review"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    step = models.CharField(max_length=20, choices=Step.choices, default=Step.TARGET)
+    data = models.JSONField(default=dict, blank=True)
+    dimension = models.ForeignKey("core.Dimension", null=True, blank=True, on_delete=models.SET_NULL,
+                                  related_name="+")
+
+    class Meta(TenantModel.Meta):
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Tag draft {self.pk} {self.data.get('name', '')} ({self.get_status_display()})"
+
+
+class TagRun(TenantModel):
+    """A /tag preview waiting for approval: the transactions found, the value proposed for each with its confidence
+    and reason, and what the user changed (skipped rows, values set by hand). ``data`` holds the command, period,
+    copy summary and rows. Nothing is tagged until it is approved."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        APPROVED = "approved", "Approved"
+        CANCELLED = "cancelled", "Cancelled"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    dimension = models.ForeignKey("core.Dimension", on_delete=models.CASCADE, related_name="+")
+    data = models.JSONField(default=dict, blank=True)
+
+    class Meta(TenantModel.Meta):
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Tag run {self.pk} {self.dimension} ({self.get_status_display()})"
+
+
 class CommandReference(models.Model):
     """One native iLA command, as defined in code: syntax, parameters and examples. Refreshed from the command
     registry after every migrate and by ``manage.py sync_command_reference``, so it never drifts from what the

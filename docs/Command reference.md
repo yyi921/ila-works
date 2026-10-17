@@ -1,6 +1,6 @@
 # iLA command reference
 
-Every command starts with `/`. Parameters follow `--` in any order and may contain spaces (`--September 2026`). `<< file` gives an input file (a file picker opens); `>> name.xlsx` or `>> name.csv` saves the result to your Downloads folder. Unknown parameters are errors, never ignored. Type `/help <command>` in the console for the same detail.
+Every command starts with `/`. Parameters follow `--` in any order and may contain spaces (`--September 2026`). `<< file` gives an input file (a file picker opens; the name is optional); `>> name.xlsx` or `>> name.csv` saves the result to your Downloads folder. Unknown parameters are errors, never ignored. Type `/help <command>` in the console for the same detail.
 
 **Periods** (wherever `--<period>` appears): `September 2026`, `Sep 2026`, `Sep-26`, `2026-09`, `09/2026`, `this month`, `last month`, `this quarter`, `last quarter`, `Q1 FY2027`, `FY2026`, `this fy`, `last fy`, `today`, `yesterday`, a date such as `30/06/2026` (day first), or a range: `Jul 2026 to Sep 2026`. Quarters and years follow the financial year end set in Xero.
 
@@ -11,7 +11,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | Command | Also | What it does | Usage |
 | --- | --- | --- | --- |
 | `/status` |  | Quick update: cash, revenue, debtors, bills due and bank reconciliation; or a measure against budget and last year. | `/status [--<period>] [--revenue\|--cos\|--gp\|--expenses\|--profit] [--mtd\|--qtd\|--ytd]` |
-| `/pl` | `/p&l`, `/profit` | Profit and loss by account, against budget and last year. | `/pl [--<period>] [--mtd\|--qtd\|--ytd] [>> file.xlsx]` |
+| `/pl` | `/p&l`, `/profit` | Profit and loss by account, against budget and last year; or by event (any iLA dimension) with Unassigned and a check against Xero. | `/pl [--<period>] [--mtd\|--qtd\|--ytd] [--by <dimension> \| --<dimension>] [>> file.xlsx]` |
 | `/bs` | `/balancesheet` | Balance sheet as at a date (default today). | `/bs [--as at <date>] [>> file.xlsx]` |
 | `/tb` |  | Trial balance as at a date (default today). | `/tb [--as at <date>] [>> file.xlsx]` |
 | `/cash` | `/bank` | Bank account balances as at a date (default today). | `/cash [--as at <date>]` |
@@ -23,10 +23,12 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/inv` | `/invoice`, `/bill` | Show one invoice, bill or credit note by its number. | `/inv <number>` |
 | `/find` | `/search` | Search contacts, and invoices and bills by number or reference. | `/find <text>` |
 | `/dim` | `/dimensions`, `/dims` | What you can tag by: Xero tracking categories (2 active, 4 in all) and iLA's own dimensions (no limit). | `/dim [<name>] [--archived]` |
+| `/tag` |  | Tag invoices, bills, credit notes, bank transactions or journals to a value of an iLA dimension, e.g. events. Preview first; nothing is tagged until you approve. | `/tag --dim <dimension> --invoices\|--bills\|--credits\|--bank\|--journals\|--all --<period> [--desc <text>] [--contact <name>] [--account <code or name>] [--amount <range>] [--xero <category> [<option>]] [--attachment] [--retag] [--to <value>] [--window <days>]` |
+| `/createTag` |  | Set up a dimension to tag by from a CSV of its values: brand new, or replacing a Xero tracking category so iLA shows names instead of codes. | `/createTag [<name>] [--new] [<< values.csv]` |
 | `/orgs` |  | List your organisations; * marks the one in use. | `/orgs` |
 | `/use` |  | Switch to another organisation. | `/use <name>` |
 | `/connect` |  | Connect or reconnect Xero (grants any new permissions). | `/connect` |
-| `/cancel` |  | Drop your open /_createInvoice draft. Nothing is written anywhere. | `/cancel` |
+| `/cancel` |  | Drop your open /tag preview, /createTag or /_createInvoice draft. Nothing is saved. | `/cancel` |
 | `/clean` | `/clear`, `/cls` | Clear the results on screen. Your command history (up arrow) is kept. | `/clean` |
 | `/help` | `/?` | List commands, or show how to use one: /help status. | `/help [command]` |
 
@@ -53,14 +55,15 @@ Examples:
 
 ### /pl
 
-Profit and loss by account, against budget and last year.
+Profit and loss by account, against budget and last year; or by event (any iLA dimension) with Unassigned and a check against Xero.
 
-Usage: `/pl [--<period>] [--mtd|--qtd|--ytd] [>> file.xlsx]`
+Usage: `/pl [--<period>] [--mtd|--qtd|--ytd] [--by <dimension> | --<dimension>] [>> file.xlsx]`
 
 | Parameter | Meaning |
 | --- | --- |
 | `--<period>` | Defaults to this month to date |
 | `--mtd --qtd --ytd` | To-date window (pick one) |
+| `--by <dimension>  or  --<dimension>` | A column per value, e.g. --by event or just --event. Xero tracking and iLA tags count together. |
 
 Examples:
 
@@ -68,6 +71,8 @@ Examples:
 - `/pl --September 2026`
 - `/pl --ytd >> pl-ytd.xlsx`
 - `/pl --Jul 2026 to Sep 2026`
+- `/pl --event --Sep 2026`
+- `/pl --by event --FY2027 >> events.xlsx`
 
 ### /bs
 
@@ -241,6 +246,52 @@ Examples:
 - `/dim`
 - `/dim event`
 - `/dim department --archived`
+
+### /tag
+
+Tag invoices, bills, credit notes, bank transactions or journals to a value of an iLA dimension, e.g. events. Preview first; nothing is tagged until you approve.
+
+Usage: `/tag --dim <dimension> --invoices|--bills|--credits|--bank|--journals|--all --<period> [--desc <text>] [--contact <name>] [--account <code or name>] [--amount <range>] [--xero <category> [<option>]] [--attachment] [--retag] [--to <value>] [--window <days>]`
+
+| Parameter | Meaning |
+| --- | --- |
+| `--dim <dimension>` | The iLA dimension to tag to (not needed if you have only one). |
+| `--invoices --bills --credits --bank --journals` | What to tag; any of them. --all for every type. Journals are manual journals. |
+| `--<period>` | Mar 2026, last month, Jul 2026 to Sep 2026. Both end dates are included. |
+| `--desc <text>` | Description, reference or number contains it; ABBA or Bjorn for either. |
+| `--contact <name>` | The contact's name contains it. |
+| `--account <code or name>` | Only lines on these accounts (default: P&L lines). |
+| `--amount <range>` | >1000, <500, 500 to 5000 or 1200 (the P&L amount). |
+| `--xero <category> [<option>]` | Only lines Xero already tracks in that category (and option). |
+| `--attachment` | Only transactions with a file attached in Xero. |
+| `--retag` | Include transactions already tagged in the dimension. |
+| `--to <value>` | Tag every match to this value (code or name) instead of proposals. |
+| `--window <days>` | How far either side of a value's dates still counts as fitting (default 3). |
+
+Examples:
+
+- `/tag --dim event --bills --invoices --Mar 2026`
+- `/tag --dim event --all --Jul 2026 to Sep 2026 --desc ABBA --to 260328ABB`
+- `/tag --dim event --bills --last month --contact Ticketek --amount >500`
+- `/tag --dim event --journals --FY2026 --xero Event --retag`
+
+### /createTag
+Set up a dimension to tag by from a CSV of its values: brand new, or replacing a Xero tracking category so iLA shows names instead of codes.
+
+Usage: `/createTag [<name>] [--new] [<< values.csv]`
+
+| Parameter | Meaning |
+| --- | --- |
+| `<name>` | The Xero tracking category or iLA dimension to set up, or the name of a new one. |
+| `--new` | Drop the open /createTag draft and start again. |
+| `<< values.csv` | The values file. With a name, iLA keeps that name and goes straight to the preview. |
+
+Examples:
+
+- `/createTag`
+- `/createTag Event`
+- `/createTag Event << events.csv`
+- `/createTag Venue`
 
 ### /orgs
 

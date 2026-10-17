@@ -12,11 +12,12 @@ from xero.source import source_for
 
 from core.invoicing import InvoiceFileError
 
-from . import builder, create_invoice
+from . import builder, create_invoice, create_tag
+from .dialogues import open_dialogue
 from .llm import LLMError
-from .models import CustomCommand
+from .models import CustomCommand, TagDraft
 from .output import ExportError, export
-from .parser import CommandSyntaxError, parse
+from .parser import CHOSEN_FILE, CommandSyntaxError, parse
 from .periods import PeriodError
 from .registry import COMMANDS, CommandError, Context, lookup
 
@@ -91,11 +92,11 @@ def run(request):
 
 
 def _dispatch(ctx, line, files):
-    """(parsed command or None, result). Plain input answers the user's open invoice draft, if there is one."""
+    """(parsed command or None, result). Plain input answers the user's open /createTag or invoice draft, if any."""
     if not line.lstrip().startswith(("/", "_")):
-        draft = create_invoice.open_draft(ctx)
+        module, draft = open_dialogue(ctx)
         if draft is not None:
-            return None, create_invoice.answer(ctx, draft, line, files)
+            return None, module.answer(ctx, draft, line, files)
     cmd = parse(line)
     if len(files) > 1:
         raise CommandError("Choose one file for this command.")
@@ -108,7 +109,8 @@ def _dispatch(ctx, line, files):
     if cmd.input_file and not spec.takes_input:
         raise CommandError(f"/{spec.name} doesn't take an input file (<<).")
     if spec.takes_input and cmd.input_file and upload is None:
-        raise CommandError(f"Choose the file {cmd.input_file} to upload.")
+        raise CommandError(f"Choose {cmd.input_file} to upload." if cmd.input_file == CHOSEN_FILE
+                           else f"Choose the file {cmd.input_file} to upload.")
     if upload is not None and upload.size > MAX_UPLOAD_BYTES:
         raise CommandError("Input files can be at most 10 MB.")
     return cmd, spec.func(ctx, cmd)
@@ -140,3 +142,15 @@ def file_download(request, pk):
     response = HttpResponse(bytes(import_file.content), content_type=import_file.content_type or "text/csv")
     response["Content-Disposition"] = f'attachment; filename="{_safe_filename(import_file.file_name)}"'
     return response
+
+
+@login_required
+@require_GET
+def createtag_template(request, pk):
+    """A starting values file for the user's own /createTag draft."""
+    draft = get_object_or_404(TagDraft, pk=pk, user=request.user, organisation__members=request.user)
+    name = _safe_filename(f"{draft.data.get('name') or 'dimension'} values.csv")
+    response = HttpResponse(create_tag.template_csv(draft), content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{name}"'
+    return response
+
