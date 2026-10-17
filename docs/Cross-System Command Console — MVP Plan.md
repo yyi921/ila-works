@@ -281,8 +281,11 @@ Features are built by 1 November, tested in week 5 and hardened in week 6; pilot
 
 1. **Week 1 (5–11 Oct): foundations and Xero connector.** Resolve the employment IP question. Register the Xero developer account under AFIS and create the app on Starter. New repository, Django scaffold, Postgres, Australian hosting, CI with tests. Synthetic hospitality dataset loaded into the Xero demo company. Xero OAuth with offline\_access, connect and disconnect screens, organisation name and status; initial and incremental sync of all v1 objects, rate-limit queue, sync log. First five pilot invitations sent.
 2. **Week 2 (12–18 Oct): console, search, reports and the first built commands.** Agreed 11 October 2026:
-   - `/_createInvoice` from timesheets (C&M Steel's labour hire case: hours per day × rate, one line per day, customer job code as reference, send-to contacts).
-   - Then new templates and commands: `_checkBill` (check a drafted or awaiting-approval invoice against agreements, orders and costs — the check mode split from billcheck), `_recFA` and `_tagEvent` (scope to confirm at the start of the week).
+   - **Reprioritised 13 October 2026: tagging is this week's focus.** Xero allows only 2 active tracking categories (4 in all, archived included), which makes iLA's unlimited dimensions the selling point.
+     1. `/dim` (`/dimensions`): native command listing Xero tracking categories (with slots used) and iLA dimensions, and one category's options or one dimension's values. Built 13 October.
+     2. `_createTag` (renamed from `_tagEvent`): built-in template for tagging, designed around TECC's case first.
+     3. `/_createInvoice` from timesheets (C&M Steel's labour hire case: hours per day × rate, one line per day, customer job code as reference, send-to contacts).
+     4. `_checkBill` (check a drafted or awaiting-approval invoice against agreements, orders and costs), then `_recFA` (scope to confirm).
    - Native commands are listed in the admin (Console → Native commands, refreshed from code on every migrate, with editable how-to notes).
 
    Original plan for this week: Command parser, autocomplete and help. `/find`, `/bal`, `/debtors`, `/inv`, `/pl`, `/tb`, `>>` export (most of these built 10 October 2026). Full-text search index. Add-on: an `ila` terminal shell (Python, prompt\_toolkit) calling the same API, with persistent history, up/down arrows, Ctrl+R search, autocomplete, and `?` for plain-English questions that draft a command for approval. The web console stays the focus; the shell is for power users.

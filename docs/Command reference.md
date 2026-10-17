@@ -22,6 +22,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/compare` |  | Compare bills, invoices or a P&L measure month by month to spot unusual, new or missing amounts. | `/compare --bill\|--invoice [<number>] [--supplier\|--customer <name or code>] [--account <code or name>] [--by account] [--<period>] [--detail] [--min <amount>]   or   /compare --revenue\|--cos\|--gp\|--expenses\|--profit [--<period>]` |
 | `/inv` | `/invoice`, `/bill` | Show one invoice, bill or credit note by its number. | `/inv <number>` |
 | `/find` | `/search` | Search contacts, and invoices and bills by number or reference. | `/find <text>` |
+| `/dim` | `/dimensions`, `/dims` | What you can tag by: Xero tracking categories (2 active, 4 in all) and iLA's own dimensions (no limit). | `/dim [<name>] [--archived]` |
 | `/orgs` |  | List your organisations; * marks the one in use. | `/orgs` |
 | `/use` |  | Switch to another organisation. | `/use <name>` |
 | `/connect` |  | Connect or reconnect Xero (grants any new permissions). | `/connect` |
@@ -223,6 +224,23 @@ Examples:
 
 - `/find acme`
 - `/find INV-004`
+
+### /dim
+
+What you can tag by: Xero tracking categories (2 active, 4 in all) and iLA's own dimensions (no limit).
+
+Usage: `/dim [<name>] [--archived]`
+
+| Parameter | Meaning |
+| --- | --- |
+| `<name>` | Show one tracking category or dimension with its options or values. |
+| `--archived` | Include archived categories, options, dimensions and values. |
+
+Examples:
+
+- `/dim`
+- `/dim event`
+- `/dim department --archived`
 
 ### /orgs
 

@@ -279,7 +279,9 @@ def route(path, params):
     if path == "TrackingCategories":
         return {"TrackingCategories": [{"Name": "Event", "Status": "ACTIVE", "Options": [
             {"Name": "Celtic Nights", "Status": "ACTIVE"}, {"Name": "Gala Dinner", "Status": "ACTIVE"},
-            {"Name": "Old Show", "Status": "ARCHIVED"}]}]}
+            {"Name": "Old Show", "Status": "ARCHIVED"}]}]
+            + ([{"Name": "Region", "Status": "ARCHIVED", "Options": [{"Name": "North", "Status": "ACTIVE"}]}]
+               if params.get("includeArchived") == "true" else [])}
     raise AssertionError(f"unexpected call {path} {params}")
 
 

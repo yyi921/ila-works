@@ -360,6 +360,15 @@ class XeroSource:
                 for c in self.client.get("TrackingCategories", cache_seconds=3600).get("TrackingCategories", [])
                 if c.get("Status") == "ACTIVE"}
 
+    def tracking_category_list(self):
+        """Every tracking category, archived ones included, with all its options and their status:
+        [{"name", "status", "options": [{"name", "status"}]}]."""
+        data = self.client.get("TrackingCategories", {"includeArchived": "true"}, cache_seconds=300)
+        return [{"name": c.get("Name", ""), "status": c.get("Status", "").title(),
+                 "options": [{"name": o.get("Name", ""), "status": o.get("Status", "").title()}
+                             for o in c.get("Options", [])]}
+                for c in data.get("TrackingCategories", [])]
+
     def recent_sales_invoices(self):
         """The 100 most recent sales invoices in any live or draft status, with their lines, so a new invoice can
         follow how similar lines were coded before. Tax types are Xero codes (e.g. OUTPUT)."""
