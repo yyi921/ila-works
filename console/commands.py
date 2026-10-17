@@ -4,9 +4,11 @@ import calendar
 from datetime import date, timedelta
 from decimal import Decimal
 
+from django.db.models import Count, Q
 from django.urls import reverse
 
-from xero.api import XeroScopeMissing
+from core.models import Dimension
+from xero.api import XeroAPIError, XeroScopeMissing
 
 from .builder import active_commands
 from .output import DATE, MONEY, NUMBER, PCT, TEXT, Column, Figure, Figures, Note, Result, Table
@@ -909,6 +911,114 @@ def find(ctx, cmd):
 
 
 # --- Organisations and connection ------------------------------------------------------------------------------
+
+
+XERO_ACTIVE_CATEGORIES, XERO_TOTAL_CATEGORIES = 2, 4
+
+
+@command(
+    "dim", aliases=("dimensions", "dims"), needs_source=False,
+    summary="What you can tag by: Xero tracking categories (2 active, 4 in all) and iLA's own dimensions (no limit).",
+    usage="/dim [<name>] [--archived]",
+    params=[("<name>", "Show one tracking category or dimension with its options or values."),
+            ("--archived", "Include archived categories, options, dimensions and values.")],
+    examples=["/dim", "/dim event", "/dim department --archived"],
+)
+def dim(ctx, cmd):
+    params = read_params(cmd, ctx, flags=("archived",))
+    archived = "archived" in params.flags
+    if ctx.organisation is None:
+        raise CommandError("No organisation selected. Use /orgs to list them and /use <name> to pick one.")
+    try:
+        categories, xero_problem = ctx.source.tracking_category_list(), ""
+    except XeroAPIError as exc:
+        categories, xero_problem = [], str(exc)
+    dimensions = _dimensions(ctx.organisation)
+    if cmd.text:
+        return _dim_detail(cmd.text, categories, dimensions, archived)
+
+    result = Result("Dimensions", subtitle="Xero tracking categories and iLA dimensions you can tag by.")
+    if xero_problem:
+        result.add(Note(f"Xero tracking categories couldn't be read: {xero_problem}", "warning"))
+    else:
+        active = [c for c in categories if c["status"] == "Active"]
+        result.add(Figures([
+            Figure("Xero categories in use", f"{len(active)} of {XERO_ACTIVE_CATEGORIES} active", TEXT,
+                   detail=f"{len(categories)} of {XERO_TOTAL_CATEGORIES} in all, archived included"),
+            Figure("iLA dimensions", str(len([d for d in dimensions if d.is_active])), TEXT,
+                   detail="No limit; kept in iLA, never written to Xero"),
+        ]))
+        table = result.add(Table([Column("Tracking category"), Column("Status"), Column("Active options", NUMBER),
+                                  Column("Archived options", NUMBER), Column("iLA dimension")],
+                                 title="Xero tracking categories"))
+        linked = {d.tracking_category.name: d.name for d in dimensions if d.tracking_category_id}
+        for c in categories:
+            if c["status"] != "Active" and not archived:
+                continue
+            table.add(c["name"], c["status"], sum(o["status"] == "Active" for o in c["options"]),
+                      sum(o["status"] != "Active" for o in c["options"]), linked.get(c["name"], ""))
+        if not table.rows:
+            result.add(Note("No tracking categories in Xero yet."))
+    table = result.add(Table([Column("Dimension"), Column("Code"), Column("Values", NUMBER), Column("From Xero"),
+                              Column("Extra fields"), Column("Tagged items", NUMBER), Column("Status")],
+                             title="iLA dimensions"))
+    for d in dimensions:
+        if not d.is_active and not archived:
+            continue
+        table.add(d.name, d.code, d.value_count, d.tracking_category.name if d.tracking_category_id else "",
+                  ", ".join(f.get("label") or f["key"] for f in d.attribute_fields), d.tag_count,
+                  "Active" if d.is_active else "Archived")
+    if not table.rows:
+        result.add(Note("No iLA dimensions yet. They are set up per organisation (admin → Dimensions) and have no "
+                        "limit, unlike Xero's tracking categories."))
+    result.add(Note("Type /dim <name> to see a category's options or a dimension's values. Xero allows 2 active and "
+                    "4 tracking categories in all; iLA dimensions add as many more as you need without touching "
+                    "Xero."))
+    return result
+
+
+def _dimensions(organisation):
+    return list(Dimension.objects.filter(organisation=organisation).select_related("tracking_category")
+                .annotate(value_count=Count("values", filter=Q(values__is_active=True), distinct=True),
+                          tag_count=Count("assignments", distinct=True))
+                .order_by("name"))
+
+
+def _dim_detail(text, categories, dimensions, archived):
+    wanted = text.strip().lower()
+    cats = [c for c in categories if wanted in c["name"].lower()]
+    dims = [d for d in dimensions if wanted in d.name.lower() or wanted == d.code.lower()]
+    if not cats and not dims:
+        raise CommandError(f'No tracking category or dimension matches "{text}". Type /dim to see them all.')
+    result = Result(f"Dimensions: {text}")
+    for c in cats:
+        table = result.add(Table([Column("Option"), Column("Status")],
+                                 title=f"Xero tracking category {c['name']} ({c['status'].lower()})"))
+        for o in sorted(c["options"], key=lambda o: o["name"].lower()):
+            if o["status"] == "Active" or archived:
+                table.add(o["name"], o["status"])
+        hidden = sum(o["status"] != "Active" for o in c["options"]) if not archived else 0
+        if hidden:
+            result.add(Note(f"{hidden} archived option(s) hidden; add --archived to see them."))
+    for d in dims:
+        fields = [(f["key"], f.get("label") or f["key"]) for f in d.attribute_fields]
+        table = result.add(Table([Column("Code"), Column("Value"), Column("Xero option")]
+                                 + [Column(label) for _, label in fields] + [Column("Status")],
+                                 title=f"iLA dimension {d.name}" + (f" (from Xero {d.tracking_category.name})"
+                                                                    if d.tracking_category_id else "")))
+        for v in d.values.select_related("tracking_option").order_by("name"):
+            if v.is_active or archived:
+                table.add(v.code, v.name, v.tracking_option.name if v.tracking_option_id else "",
+                          *[_attr(v.attributes.get(key)) for key, _ in fields], "Active" if v.is_active else "Archived")
+        if not table.rows:
+            result.add(Note(f"{d.name} has no values yet."))
+    return result
+
+
+def _attr(value):
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    return "" if value is None else str(value)
 
 
 @command("orgs", summary="List your organisations; * marks the one in use.", examples=["/orgs"], needs_source=False)

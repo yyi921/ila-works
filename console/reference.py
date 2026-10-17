@@ -26,6 +26,9 @@ HOW_TO = {
              "statement lines can be higher; see the note in the result.",
     "inv": "Open one invoice, bill or credit note by its number, with lines, payments and amount due.",
     "find": "Search contacts and invoice or bill numbers and references, e.g. /find smith.",
+    "dim": "See what you can tag by before tagging: Xero's tracking categories (Xero allows 2 active and 4 in all) "
+           "and iLA's own dimensions, which have no limit and never change Xero. /dim event lists a category's "
+           "options and a dimension's values with their extra fields (e.g. venue, event date).",
     "orgs": "List the organisations you can use; * marks the current one.",
     "use": "Switch organisation, e.g. /use TECC. Commands then read that organisation.",
     "connect": "Connect or reconnect Xero. Also grants any new permissions iLA needs (it will say when).",
