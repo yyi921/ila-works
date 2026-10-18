@@ -154,3 +154,12 @@ def createtag_template(request, pk):
     response["Content-Disposition"] = f'attachment; filename="{name}"'
     return response
 
+
+@login_required
+@require_GET
+def splittag_template(request):
+    from .split_tag import template_csv
+
+    response = HttpResponse(template_csv(), content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = 'attachment; filename="splittag-template.csv"'
+    return response

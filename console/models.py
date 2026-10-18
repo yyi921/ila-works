@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models.functions import Lower
 
 from core.models import TenantModel
 
@@ -123,6 +124,53 @@ class TagRun(TenantModel):
 
     def __str__(self):
         return f"Tag run {self.pk} {self.dimension} ({self.get_status_display()})"
+
+
+class SplitRule(TenantModel):
+    """A named /splittag rule, saved when a CSV is approved and re-run with ``/splittag --<name> --<period>``.
+    ``scope``: {"accounts": "6300-6380; 6400", "types": ["journals"], "contact": "", "desc": ""}.
+    ``allocations``: [{"value": DimensionValue id, "code", "amount": "100" or null, "percent": "30" or null}];
+    fixed amounts are taken first, percentages apply to what's left, anything left over stays untagged."""
+
+    name = models.CharField(max_length=40)
+    dimension = models.ForeignKey("core.Dimension", on_delete=models.CASCADE, related_name="+")
+    scope = models.JSONField(default=dict)
+    allocations = models.JSONField(default=list)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                   related_name="+")
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                   related_name="+")
+    last_run = models.CharField(max_length=100, blank=True, help_text="The period it was last applied to.")
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.UniqueConstraint("organisation", Lower("name"), name="console_splitrule_name_uniq",
+                                    violation_error_message="There's already a split rule with this name."),
+        ]
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class SplitRun(TenantModel):
+    """A /splittag preview waiting for approval: the rules, the period, the lines in each rule's scope and the
+    shares worked out for them. Nothing is tagged (or saved as a rule) until it is approved."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        APPROVED = "approved", "Approved"
+        CANCELLED = "cancelled", "Cancelled"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    data = models.JSONField(default=dict, blank=True)
+
+    class Meta(TenantModel.Meta):
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Split run {self.pk} ({self.get_status_display()})"
 
 
 class CommandReference(models.Model):

@@ -24,11 +24,12 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/find` | `/search` | Search contacts, and invoices and bills by number or reference. | `/find <text>` |
 | `/dim` | `/dimensions`, `/dims` | What you can tag by: Xero tracking categories (2 active, 4 in all) and iLA's own dimensions (no limit). | `/dim [<name>] [--archived]` |
 | `/tag` |  | Tag invoices, bills, credit notes, bank transactions or journals to a value of an iLA dimension, e.g. events. Preview first; nothing is tagged until you approve. | `/tag --dim <dimension> --invoices\|--bills\|--credits\|--bank\|--journals\|--all --<period> [--desc <text>] [--contact <name>] [--account <code or name>] [--amount <range>] [--xero <category> [<option>]] [--attachment] [--retag] [--to <value>] [--window <days>]` |
+| `/splittag` |  | Split the amounts on chosen GL accounts across a dimension's values (e.g. labour across events) by fixed amounts, percentages or both, from a CSV of named rules or a saved rule. | `/splittag [<< rules.csv] [--<rule name>\|--rule <name>] [--<period>] [--gl <accounts>] [--invoices --bills --credits --bank --journals\|--all] [--contact <name>] [--desc <text>] [--template]` |
 | `/createTag` |  | Set up a dimension to tag by from a CSV of its values: brand new, or replacing a Xero tracking category so iLA shows names instead of codes. | `/createTag [<name>] [--new] [<< values.csv]` |
 | `/orgs` |  | List your organisations; * marks the one in use. | `/orgs` |
 | `/use` |  | Switch to another organisation. | `/use <name>` |
 | `/connect` |  | Connect or reconnect Xero (grants any new permissions). | `/connect` |
-| `/cancel` |  | Drop your open /tag preview, /createTag or /_createInvoice draft. Nothing is saved. | `/cancel` |
+| `/cancel` |  | Drop your open /splittag or /tag preview, /createTag or /_createInvoice draft. Nothing is saved. | `/cancel` |
 | `/clean` | `/clear`, `/cls` | Clear the results on screen. Your command history (up arrow) is kept. | `/clean` |
 | `/help` | `/?` | List commands, or show how to use one: /help status. | `/help [command]` |
 
@@ -275,7 +276,33 @@ Examples:
 - `/tag --dim event --bills --last month --contact Ticketek --amount >500`
 - `/tag --dim event --journals --FY2026 --xero Event --retag`
 
+### /splittag
+
+Split the amounts on chosen GL accounts across a dimension's values (e.g. labour across events) by fixed amounts, percentages or both, from a CSV of named rules or a saved rule.
+
+Usage: `/splittag [<< rules.csv] [--<rule name>|--rule <name>] [--<period>] [--gl <accounts>] [--invoices --bills --credits --bank --journals|--all] [--contact <name>] [--desc <text>] [--template]`
+
+| Parameter | Meaning |
+| --- | --- |
+| `<< rules.csv` | Rules to apply; approving also saves them by name. /splittag --template for the file. |
+| `--<rule name>  or  --rule <name>` | Run a saved rule (several: --rule labour, casuals). |
+| `--<period>` | Sep 2026, last month, Jul 2026 to Sep 2026; both dates included. Needed unless the file has From and To. |
+| `--gl <accounts>` | Change the accounts for this run: 6300-6380, 6355 or 6300-6380; 6400. |
+| `--invoices --bills --credits --bank --journals --all` | Change the transaction types for this run. |
+| `--contact <name>  --desc <text>` | Only lines whose contact or description contains it. |
+| `--template` | Download the CSV template. |
+
+Examples:
+
+- `/splittag`
+- `/splittag --template`
+- `/splittag --Sep 2026 << labour.csv`
+- `/splittag --labour --Sep 2026`
+- `/splittag --gl 6300-6380 --sep-2026 --labour`
+- `/splittag --rule casuals --Oct 2026 --journals`
+
 ### /createTag
+
 Set up a dimension to tag by from a CSV of its values: brand new, or replacing a Xero tracking category so iLA shows names instead of codes.
 
 Usage: `/createTag [<name>] [--new] [<< values.csv]`

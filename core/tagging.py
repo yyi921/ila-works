@@ -69,7 +69,9 @@ def _parent(target):
     return getattr(target, PARENT_OF_LINE[type(target)][1])
 
 
-def _check_allocations(organisation_id, dimension, allocations):
+def _check_allocations(organisation_id, dimension, allocations, partial=False):
+    """``partial``: the shares may add up to less than 1, the rest staying Unassigned (a /splittag rule that
+    allocates $400 of $600). Otherwise they must add up to exactly 1."""
     allocations = [(value, Decimal(share)) for value, share in allocations]
     for value, share in allocations:
         if value.dimension_id != dimension.pk:
@@ -78,8 +80,10 @@ def _check_allocations(organisation_id, dimension, allocations):
             raise ValidationError(f"{value} belongs to another organisation.")
         if not ONE >= share > 0:
             raise ValidationError(f"Allocation {share} for {value} must be greater than 0 and at most 1.")
-    if allocations and sum(share for _, share in allocations) != ONE:
-        raise ValidationError(f"Allocations sum to {sum(s for _, s in allocations)}, not 1.")
+    total = sum((share for _, share in allocations), Decimal("0"))
+    if allocations and (total > ONE or (total != ONE and not partial)):
+        raise ValidationError(f"Allocations sum to {total}, not 1." if not partial else
+                              f"Allocations sum to {total}, more than 1.")
     if len({value.pk for value, _ in allocations}) != len(allocations):
         raise ValidationError("Each dimension value may appear only once per assignment.")
     return allocations
@@ -91,7 +95,7 @@ def _live(queryset):
 
 @transaction.atomic
 def assign(target, dimension, allocations, *, method, confidence, set_by=None, status=Tag.Status.PROPOSED,
-           rule="", note="", batch=None, apply=True):
+           rule="", note="", batch=None, apply=True, partial=False):
     """Record that ``target`` (a line, or a whole document, bank transaction or journal) belongs to
     ``allocations``: a list of (DimensionValue, Decimal) whose shares sum to exactly 1. An empty list means
     "Unassigned", which still overrides lower-precedence assignments (e.g. a manual "not part of any event" on
@@ -100,7 +104,7 @@ def assign(target, dimension, allocations, *, method, confidence, set_by=None, s
     field = _target_field(target)
     if dimension.organisation_id != target.organisation_id:
         raise ValidationError(f"Dimension {dimension} belongs to another organisation.")
-    allocations = _check_allocations(target.organisation_id, dimension, allocations)
+    allocations = _check_allocations(target.organisation_id, dimension, allocations, partial)
 
     _live(Assignment.objects.select_for_update().filter(**{field: target}, dimension=dimension, method=method)
           ).update(status=Tag.Status.SUPERSEDED)
@@ -256,14 +260,23 @@ def tracking_mismatches(organisation, dimension):
 
 
 def unbalanced_lines(organisation, dimension):
-    """Lines whose live tags in ``dimension`` don't sum to 1, as (line field, line id, total) tuples.
-    Should always be empty; run it before reporting by dimension."""
+    """Lines whose live tags in ``dimension`` don't add up to what their assignment allocated (1, or less for a
+    partial split), as (line field, line id, total) tuples. Should always be empty; run it before reporting by
+    dimension."""
     live = Tag.objects.filter(organisation=organisation, dimension=dimension).exclude(status__in=Tag.NOT_LIVE)
+    expected = dict(AssignmentShare.objects.filter(assignment__dimension=dimension).values("assignment")
+                    .annotate(total=Sum("allocation")).values_list("assignment", "total"))
     problems = []
     for field in LINE_FIELDS.values():
-        rows = (live.filter(**{f"{field}__isnull": False}).values(field).annotate(total=Sum("allocation"))
-                .exclude(total=ONE))
-        problems += [(field, row[field], row["total"]) for row in rows]
+        rows = (live.filter(**{f"{field}__isnull": False}).values(field, "assignment")
+                .annotate(total=Sum("allocation")))
+        totals = {}
+        for row in rows:
+            line_total, wanted = totals.get(row[field], (Decimal("0"), Decimal("0")))
+            totals[row[field]] = (line_total + row["total"],
+                                  wanted + (expected.get(row["assignment"], ONE) if row["assignment"] else ONE))
+        problems += [(field, line, total) for line, (total, wanted) in totals.items()
+                     if total != min(wanted, ONE) or total > ONE]
     return problems
 
 

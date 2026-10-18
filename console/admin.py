@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
 
-from .models import CommandReference, CustomCommand, TagRun
+from .models import CommandReference, CustomCommand, SplitRule, SplitRun, TagRun
 
 
 @admin.register(CustomCommand)
@@ -70,6 +70,52 @@ class TagRunAdmin(admin.ModelAdmin):
     @admin.display(description="Approved")
     def approved(self, obj):
         return len(obj.data.get("approved", []))
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(SplitRule)
+class SplitRuleAdmin(admin.ModelAdmin):
+    """Saved /splittag rules. Change them with a new CSV (/splittag << rules.csv); delete one here."""
+
+    list_display = ("name", "organisation", "dimension", "accounts", "types", "allocation", "last_run", "updated_by")
+    list_filter = ("organisation", "dimension")
+    search_fields = ("name",)
+    readonly_fields = ("scope", "allocations", "created_by", "updated_by", "last_run", "created_at", "updated_at")
+
+    @admin.display(description="Accounts")
+    def accounts(self, obj):
+        return "; ".join(lo if lo == hi else f"{lo}-{hi}" for lo, hi in obj.scope.get("accounts", []))
+
+    @admin.display(description="Types")
+    def types(self, obj):
+        return ", ".join(obj.scope.get("types") or ["all"])
+
+    @admin.display(description="Allocation")
+    def allocation(self, obj):
+        return ", ".join(f"{a['code']} " + (f"${a['amount']}" if a.get("amount") else f"{a['percent']}%")
+                         for a in obj.allocations)
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(SplitRun)
+class SplitRunAdmin(admin.ModelAdmin):
+    """Each /splittag preview and what became of it. The tags are under Core > Assignments (rule "split:<name>")."""
+
+    list_display = ("created_at", "organisation", "user", "status", "command", "rules")
+    list_filter = ("organisation", "status")
+    readonly_fields = [f.name for f in SplitRun._meta.fields]
+
+    @admin.display(description="Command")
+    def command(self, obj):
+        return obj.data.get("command", "")
+
+    @admin.display(description="Rules")
+    def rules(self, obj):
+        return ", ".join(r["name"] for r in obj.data.get("rules", []))
 
     def has_add_permission(self, request):
         return False

@@ -492,7 +492,7 @@ class Tag(TenantModel):
     journal_line = models.ForeignKey(JournalLine, null=True, blank=True, on_delete=models.CASCADE, related_name="tags")
     dimension = models.ForeignKey(Dimension, on_delete=models.CASCADE, related_name="+", editable=False)
     dimension_value = models.ForeignKey(DimensionValue, on_delete=models.PROTECT, related_name="tags")
-    allocation = models.DecimalField(max_digits=7, decimal_places=6, default=Decimal("1"),
+    allocation = models.DecimalField(max_digits=13, decimal_places=12, default=Decimal("1"),
                                      help_text="Share of the line attributed to this value, 0 < allocation <= 1.")
     method = models.CharField(max_length=20, choices=Method.choices)
     rule = models.CharField(max_length=100, blank=True, help_text="Identifier of the rule that proposed the tag.")
@@ -623,7 +623,7 @@ class Assignment(TenantModel):
 class AssignmentShare(models.Model):
     assignment = models.ForeignKey(Assignment, on_delete=models.CASCADE, related_name="shares")
     dimension_value = models.ForeignKey(DimensionValue, on_delete=models.PROTECT, related_name="+")
-    allocation = models.DecimalField(max_digits=7, decimal_places=6, default=Decimal("1"))
+    allocation = models.DecimalField(max_digits=13, decimal_places=12, default=Decimal("1"))
 
     class Meta:
         constraints = [

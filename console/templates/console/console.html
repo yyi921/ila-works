@@ -62,7 +62,14 @@
       return grid;
     }
     const wrap = el("div");
-    if (block.title) wrap.append(el("div", "table-title", block.title));
+    const top = el("div", "table-head");
+    top.append(el("div", "table-title", block.title || ""));
+    const copy = el("button", "tool", "Copy table");
+    copy.type = "button";
+    copy.title = "Copy this table to paste into Excel";
+    copy.addEventListener("click", () => copyTable(block, copy));
+    top.append(copy);
+    wrap.append(top);
     const scroller = el("div", "table-wrap");
     const table = el("table");
     const numeric = block.columns.map(c => ["money", "pct", "number"].includes(c.kind));
@@ -83,6 +90,47 @@
     return wrap;
   }
 
+  // A cell as Excel should read it: "(1,234.50)" -> -1234.50, "1,234.50" -> 1234.50; text kept as is.
+  function excelCell(value, numeric) {
+    let text = String(value ?? "").replace(/[\t\r\n]+/g, " ");
+    if (numeric && /^\(?-?[\d,]+(\.\d+)?%?\)?$/.test(text)) {
+      const negative = text.startsWith("(");
+      text = text.replace(/[(),]/g, "");
+      if (negative) text = "-" + text;
+    }
+    return text;
+  }
+
+  async function copyTable(block, button) {
+    const numeric = block.columns.map(c => ["money", "pct", "number"].includes(c.kind));
+    const lines = [block.columns.map(c => excelCell(c.label, false)).join("\t")];
+    for (const row of block.rows) lines.push(row.cells.map((v, i) => excelCell(v, numeric[i])).join("\t"));
+    const text = lines.join("\r\n");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      const area = el("textarea");
+      area.value = text;
+      document.body.append(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
+    const label = button.textContent;
+    button.textContent = "Copied – paste into Excel";
+    setTimeout(() => { button.textContent = label; }, 2000);
+  }
+
+  // Commands that are safe to run again just to save their result (not ones that start or change something).
+  function canSave(command) {
+    return /^\/\w/.test(command) && !command.includes("<<") && !command.includes(">>")
+      && !/^\/(createtag|cancel|use|connect|clean|clear|cls|_)/i.test(command);
+  }
+
+  function fileName(title) {
+    return (title.replace(/[^\w\- ]+/g, " ").trim().replace(/\s+/g, "-").toLowerCase().slice(0, 60) || "ila") + ".xlsx";
+  }
+
   function addEntry(command) {
     const entry = el("div", "entry");
     entry.append(el("div", "cmd", command));
@@ -94,7 +142,7 @@
     return card;
   }
 
-  function showResult(card, data) {
+  function showResult(card, data, command) {
     card.replaceChildren();
     if (!data.ok) {
       card.classList.add("error");
@@ -109,6 +157,15 @@
       const a = el("a", "", r.link_text || "Open the Xero sign-in");
       a.href = r.link;
       card.append(a);
+    }
+    if (command && canSave(command) && r.blocks.some(b => b.type === "table")) {
+      const tools = el("div", "tools");
+      const save = el("button", "tool", "Download Excel");
+      save.type = "button";
+      save.title = "Save this result as an Excel file (same as adding >> name.xlsx)";
+      save.addEventListener("click", () => run(command + " >> " + fileName(r.title)));
+      tools.append(save);
+      card.append(tools);
     }
     if (data.organisation !== undefined) document.getElementById("org").textContent = data.organisation || "No organisation connected";
   }
@@ -128,7 +185,7 @@
     try {
       const type = resp.headers.get("Content-Type") || "";
       if (type.includes("application/json")) {
-        showResult(card, await resp.json());
+        showResult(card, await resp.json(), command);
       } else if (resp.ok) {
         const disposition = resp.headers.get("Content-Disposition") || "";
         const name = (disposition.match(/filename="([^"]+)"/) || [, "export"])[1];
