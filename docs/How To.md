@@ -4,7 +4,7 @@ A practical guide to the iLA console: what each command is for, how to type it, 
 full list of parameters with examples, see [Command reference](Command%20reference.md), or type `/help <command>` in
 the console.
 
-_Last updated: 17 October 2026 (added `/pl --event`)._
+_Last updated: 18 October 2026 (added `/splittag`)._
 
 ---
 
@@ -37,6 +37,16 @@ _Last updated: 17 October 2026 (added `/pl --event`)._
 
 Unknown parameters are errors, never silently ignored, so a typo won't give you a wrong report.
 
+### Getting results into Excel
+
+- **Download Excel** (button under a result): saves the whole result as an `.xlsx` file in your Downloads
+  folder, with numbers as real numbers. Same as adding `>> name.xlsx` to the command, e.g.
+  `/pl --event --2026-09 >> events-sep.xlsx`.
+- **Copy table** (button beside each table): copies that table; paste it straight into an open spreadsheet
+  (Ctrl+V). Brackets become minus signs, so the numbers add up in Excel.
+
+Wide reports such as `/pl --event` are easier to read this way than scrolling left and right.
+
 ### Periods
 
 Anywhere you see `--<period>`, you can write:
@@ -65,6 +75,8 @@ Quarters and financial years follow the year end set in Xero.
 | See revenue for a month against budget and last year | `/status --September 2026 --revenue --mtd` |
 | Prepare a P&L for the month-end pack | `/pl --last month >> pl.xlsx` |
 | See profit by event | `/pl --event --Sep 2026` (or `/pl --by event`) |
+| Share September's labour (6300-6380) across events | `/splittag --Sep 2026 << labour.csv`, then `approve` |
+| Do the same split again next month | `/splittag --labour --Oct 2026` |
 | Get a balance sheet at year end | `/bs --as at 30/06/2026` |
 | Get a trial balance for the audit file | `/tb --as at 30/06/2026 >> tb.xlsx` |
 | Check bank balances before a payment run | `/cash` |
@@ -187,6 +199,46 @@ Quarters and financial years follow the year end set in Xero.
 - **Use it:** before tagging. Xero allows 2 active tracking categories (4 in total); iLA dimensions have no limit
   and never change Xero. `/dim event` shows a category's options, or a dimension's values with their extra fields
   (e.g. venue, event date). `--archived` includes archived items.
+
+#### `/splittag` — split GL amounts across events
+- **Purpose:** share out the amounts on chosen GL accounts across events (or any dimension), e.g. September's
+  labour on 6300-6380, by fixed amounts, percentages or both. It's tagging, so **Xero isn't changed**. (Moving
+  amounts between GL accounts, a reclassification, will be a separate `/split` command that builds a journal file.)
+- **Syntax:** `/splittag [<< rules.csv] [--<rule name>] [--<period>] [--gl <accounts>] [--journals ...] [--template]`
+- **Steps:**
+  1. `/splittag --Sep 2026` (or just `/splittag`, or `/splittag --template`) and download the template from the
+     link. It also lists your saved rules and the exact command to type next. One row per event; rows with the
+     same **Rule** name form one rule.
+
+     | Column | What goes in it |
+     | --- | --- |
+     | Rule | A name, e.g. `labour` (letters, digits, `-`, `_`). Saved, so you can run it again. |
+     | Accounts | `6300-6380`, `6355`, or a list: `6300-6380; 6400`. |
+     | Types | `all`, or any of `invoices`, `bills`, `credits`, `bank`, `journals`, e.g. `journals` for only the journals in 6355. |
+     | Contact, Description | Optional: only lines whose contact or description contains this. |
+     | From, To | Optional: the period. Leave empty and give it in the command instead. |
+     | Dimension | e.g. `Event` (can be empty if you have only one). |
+     | Value | The event code, e.g. `260902MEC`. |
+     | Amount **or** Percent | One of them per row. |
+
+  2. `/splittag --Sep 2026 << labour.csv`. iLA reads September from Xero and shows each rule: the lines and total
+     in scope, each event's amount and share, and what's left.
+  3. `approve` tags the lines and saves the rules by name; `cancel` drops it.
+- **How amounts work** (total $600 on the accounts in scope):
+  - **Amounts** come first: A $100, B $300 → A 16.7%, B 50%, **$200 stays untagged** (Unassigned in reports).
+  - **Percentages** apply to what's left after the amounts: A $100, then B 30% and C 70% of the $500 left → $150
+    and $350. With no amounts, they're percentages of the whole total. Under 100% leaves the rest untagged.
+  - **A group of accounts is pro-rated:** the same shares go on every line in scope, so each account carries its
+    part. Amounts are exact to the cent in reports ($100 is $100.00).
+  - **Different parts of one GL** can follow different rules (e.g. 6355 journals one way, 6355 bills another), but
+    a line that falls into two rules is an error, so nothing is split twice.
+- **Run a saved rule again:** `/splittag --labour --Oct 2026`, or `/splittag --rule labour --Oct 2026`. Change the
+  scope for that run only with `--gl 6355`, `--journals`, `--contact` or `--desc`, e.g.
+  `/splittag --gl 6300-6380 --sep-2026 --labour`. Running it again for the same period replaces the earlier split.
+- **See saved rules:** `/splittag` on its own. Admin → Console → **Split rules** (delete one there) and **Split
+  runs**. The tags themselves are under Core → Assignments (Rule "split:labour").
+- Splits are line-level decisions by you, so they win over Xero tracking and over a whole-transaction `/tag`.
+  `/pl --event` shows them straight away.
 
 #### `/createTag` — set up a dimension from a values file
 - **Purpose:** create a dimension to tag by, or give an existing Xero tracking category friendly names and
@@ -313,7 +365,7 @@ Quarters and financial years follow the year end set in Xero.
 | --- | --- | --- | --- |
 | `/clean` | `/clear`, `/cls` | Clear results on screen (history kept) | `/clean` |
 | `/help` | `/?` | List all commands (including your organisation's built ones), or explain one | `/help [command]` |
-| `/cancel` | | Drop your open `/tag` preview, `/createTag` or `/_createInvoice` draft; nothing is saved | `/cancel` |
+| `/cancel` | | Drop your open `/splittag` or `/tag` preview, `/createTag` or `/_createInvoice` draft; nothing is saved | `/cancel` |
 
 ---
 
@@ -398,7 +450,8 @@ Nothing is written to Xero; a person imports the file.
 
 Planned, not built yet:
 
-- `/tag --lines`: tag single lines and split one transaction across events.
+- `/split`: reclassify amounts between GL accounts (e.g. COGS into food and beverage) as a Xero manual journal import file, using the same CSV and rules as `/splittag`.
+- Plain-English corrections in a `/tag` preview, and `skip`/`set` by contact or text, `untag`.
 - Purchase orders, and reading attached PDFs to find the event.
 - `/_createInvoice` from timesheets (day lines, hours × rate, job codes).
 - `_checkBill` and `_recFA` templates.
@@ -414,6 +467,8 @@ Planned, not built yet:
 | --- | --- |
 | 17 Oct 2026 | Guide created, covering all native commands, built commands and `/dim`. |
 | 17 Oct 2026 | Added `/createTag` (replaces the planned `_createTag` template). |
+| 18 Oct 2026 | **Download Excel** and **Copy table** buttons on results. `/pl --event` warns about previews not yet approved. `/splittag` with no rule shows the template. |
+| 18 Oct 2026 | Added `/splittag`. |
 | 17 Oct 2026 | Added `/pl --event` (`/pl --by <dimension>`). |
 | 17 Oct 2026 | Added `/tag`. |
 | 17 Oct 2026 | `/tag` lists already-tagged transactions too (Tagged in Xero / Tagged in iLA columns); a distinctive word of an event name counts as evidence; "same supplier" is now low confidence. |

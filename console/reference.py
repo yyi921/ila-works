@@ -36,6 +36,11 @@ HOW_TO = {
            "--attachment), then either --to one value or let iLA propose one per transaction from Xero tracking, "
            "codes and names in the text, contacts and event dates. Check the preview and approve all, by "
            "confidence or by row. Xero isn't changed.",
+    "splittag": "Split amounts on GL accounts across events (or any dimension) without changing Xero. Download the "
+                "template (/splittag --template), write named rules (accounts, types, values with an Amount or "
+                "Percent; amounts first, percentages of what's left, the rest untagged), choose it with "
+                "/splittag --Sep 2026 << rules.csv, check and approve. Re-run a saved rule each month with "
+                "/splittag --labour --Oct 2026.",
     "createtag": "Set up something to tag by from a CSV of its values. Pick a Xero tracking category to replace "
                  "(iLA then shows your names and details instead of codes like CCH1221; Xero isn't changed), an iLA "
                  "dimension to update, or a brand-new one. Download the starting file, fill in Code, Name, "

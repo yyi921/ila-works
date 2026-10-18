@@ -28,6 +28,13 @@
   .figure .detail { color: var(--muted); font-size: 12px; }
   .table-wrap { overflow-x: auto; margin: 10px 0; }
   .table-title { font-weight: 600; margin: 12px 0 4px; }
+  .table-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-top: 12px; }
+  .table-head .table-title { margin: 0; }
+  .tools { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .tool { font: 12px inherit; padding: 3px 10px; border: 1px solid var(--line); border-radius: 5px;
+          background: transparent; color: var(--accent); cursor: pointer; white-space: nowrap; }
+  .tool:hover { border-color: var(--accent); }
+  html.incognito .tool { border-radius: 0; font-family: var(--mono); }
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
   th, td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }

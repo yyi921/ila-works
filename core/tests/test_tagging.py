@@ -129,3 +129,14 @@ def test_split_amount_ties_to_the_cent(amount, shares, expected):
     parts = split_amount(D(amount), [D(s) for s in shares])
     assert parts == [D(e) for e in expected]
     assert sum(parts) == D(amount)
+
+
+def test_partial_split_leaves_the_rest_unassigned_only_when_asked(line, events):
+    dim, (ev1, ev2, _) = events
+    with pytest.raises(ValidationError):
+        set_line_tags(line, dim, [(ev1, D("0.25")), (ev2, D("0.25"))], **TAG_KW)
+    tags = set_line_tags(line, dim, [(ev1, D("0.25")), (ev2, D("0.25"))], partial=True, **TAG_KW)
+    assert sum(t.allocation for t in tags) == D("0.5")
+    assert unbalanced_lines(line.organisation, dim) == []
+    with pytest.raises(ValidationError, match="more than 1"):
+        set_line_tags(line, dim, [(ev1, D("0.75")), (ev2, D("0.5"))], partial=True, **TAG_KW)

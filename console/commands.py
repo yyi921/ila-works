@@ -1079,6 +1079,30 @@ def tag(ctx, cmd):
 
 
 @command(
+    "splittag", takes_input=True,
+    summary="Split the amounts on chosen GL accounts across a dimension's values (e.g. labour across events) by "
+            "fixed amounts, percentages or both, from a CSV of named rules or a saved rule.",
+    usage="/splittag [<< rules.csv] [--<rule name>|--rule <name>] [--<period>] [--gl <accounts>] "
+          "[--invoices --bills --credits --bank --journals|--all] [--contact <name>] [--desc <text>] [--template]",
+    params=[("<< rules.csv", "Rules to apply; approving also saves them by name. /splittag --template for the file."),
+            ("--<rule name>  or  --rule <name>", "Run a saved rule (several: --rule labour, casuals)."),
+            ("--<period>", "Sep 2026, last month, Jul 2026 to Sep 2026; both dates included. Needed unless the file "
+                           "has From and To."),
+            ("--gl <accounts>", "Change the accounts for this run: 6300-6380, 6355 or 6300-6380; 6400."),
+            ("--invoices --bills --credits --bank --journals --all", "Change the transaction types for this run."),
+            ("--contact <name>  --desc <text>", "Only lines whose contact or description contains it."),
+            ("--template", "Download the CSV template.")],
+    examples=["/splittag", "/splittag --template", "/splittag --Sep 2026 << labour.csv",
+              "/splittag --labour --Sep 2026", "/splittag --gl 6300-6380 --sep-2026 --labour",
+              "/splittag --rule casuals --Oct 2026 --journals"],
+)
+def splittag(ctx, cmd):
+    from .split_tag import start
+
+    return start(ctx, cmd)
+
+
+@command(
     "createtag", needs_source=False, takes_input=True,
     summary="Set up a dimension to tag by from a CSV of its values: brand new, or replacing a Xero tracking "
             "category so iLA shows names instead of codes.",
@@ -1149,7 +1173,8 @@ def clean(ctx, cmd):
     return Result("Nothing to clear", subtitle="/clean clears the results shown in the console page.")
 
 
-@command("cancel", summary="Drop your open /tag preview, /createTag or /_createInvoice draft. Nothing is saved.",
+@command("cancel", summary="Drop your open /splittag or /tag preview, /createTag or /_createInvoice draft. "
+                           "Nothing is saved.",
          usage="/cancel", examples=["/cancel"], needs_source=False)
 def cancel(ctx, cmd):
     read_params(cmd, ctx)

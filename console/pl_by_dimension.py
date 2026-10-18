@@ -12,6 +12,7 @@ depreciation, expense claims, currency gains) shows in the Difference column, so
 """
 
 from collections import defaultdict
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
 from core.models import (
@@ -57,8 +58,19 @@ def _base(amount, parent, base_currency):
     return amount
 
 
-def _lines(organisation, start, end):
-    """(account, P&L amount as Xero shows it, line field, line id) for every P&L line in the period."""
+@dataclass
+class PeriodLine:
+    account: object
+    category: object  # P&L category (revenue, cost_of_sales...), None for a balance sheet account
+    amount: Decimal  # as Xero's P&L shows it: income and costs positive; a balance sheet line as a debit
+    line_field: str
+    line: object
+    parent: object
+
+
+def period_lines(organisation, start, end, *, pl_only=True):
+    """Every posted line dated in the period with an account, as PeriodLine: net of tax, in the base currency.
+    ``pl_only`` keeps P&L accounts only."""
     base_currency = organisation.base_currency
     sources = [
         (DocumentLine.objects.filter(document__date__gte=start, document__date__lte=end,
@@ -74,7 +86,7 @@ def _lines(organisation, start, end):
     for queryset, parent_field, line_field in sources:
         for line in queryset.filter(organisation=organisation, account__isnull=False):
             category = CATEGORY_OF_TYPE.get(line.account.source_type)
-            if category is None:
+            if category is None and pl_only:
                 continue
             parent = getattr(line, parent_field)
             if isinstance(line, JournalLine):
@@ -87,7 +99,7 @@ def _lines(organisation, start, end):
                     net -= line.tax_amount
                 debit = _debit_sign(parent) * _base(net, parent, base_currency)
             amount = -debit if category in INCOME_CATEGORIES else debit
-            yield line.account, category, amount.quantize(CENT, ROUND_HALF_UP), line_field, line.pk
+            yield PeriodLine(line.account, category, amount.quantize(CENT, ROUND_HALF_UP), line_field, line, parent)
 
 
 def _tags(organisation, dimension):
@@ -111,12 +123,16 @@ def report(ctx, dimension, period):
 
     cells = defaultdict(lambda: ZERO)  # (account id, value id or None) -> amount
     categories, accounts = {}, {}
-    for account, category, amount, line_field, line_id in _lines(org, period.start, period.end):
-        accounts[account.pk], categories[account.pk] = account, category
-        shares = tags.get((line_field, line_id))
+    for pl_line in period_lines(org, period.start, period.end):
+        account, amount = pl_line.account, pl_line.amount
+        accounts[account.pk], categories[account.pk] = account, pl_line.category
+        shares = tags.get((pl_line.line_field, pl_line.line.pk))
         if not shares:
             cells[(account.pk, UNASSIGNED)] += amount
             continue
+        rest = 1 - sum((a for _, a in shares), ZERO)
+        if rest > 0:  # a partial split (/splittag): the rest stays Unassigned
+            shares = shares + [(UNASSIGNED, rest)]
         for (value_id, _), part in zip(shares, split_amount(amount, [a for _, a in shares])):
             cells[(account.pk, value_id)] += part
 
@@ -195,10 +211,35 @@ def report(ctx, dimension, period):
                         "(invoices, bills, credit notes, bank transactions and manual journals): usually payroll, "
                         "depreciation, expense claims, inventory adjustments or currency gains. Those amounts can't "
                         "be split by " + dimension.name.lower() + " yet. Largest: " + "; ".join(gaps) + "."))
+    for pending in _pending(ctx, dimension, period):
+        result.add(Note(pending, "warning"))
     result.add(Note(f"Read from Xero first: {copied.added} new, {copied.updated} changed and {copied.unchanged} "
                     f"unchanged transaction(s). Unassigned is what isn't tagged to any {dimension.name.lower()}; "
                     f"tag it with /tag --dim {dimension.code} --all --{period.label}."))
     return result
+
+
+def _pending(ctx, dimension, period):
+    """Warnings for the user's open /splittag or /tag preview that overlaps the period and isn't approved yet:
+    its tags aren't in this report until it is."""
+    from .models import SplitRun, TagRun
+
+    def overlaps(first, last):
+        return first <= period.end.isoformat() and last >= period.start.isoformat()
+
+    found = []
+    split = SplitRun.objects.filter(organisation=ctx.organisation, user=ctx.user, status=SplitRun.Status.OPEN).first()
+    if split and any(r.get("dimension") == dimension.pk and r.get("period") and overlaps(*r["period"][:2])
+                     for r in split.data.get("rules", [])):
+        names = ", ".join(r["name"] for r in split.data["rules"])
+        found.append(f"Your /splittag preview ({names}) isn't approved yet, so it isn't in these figures. Type "
+                     "approve to save it, then run this report again.")
+    run = TagRun.objects.filter(organisation=ctx.organisation, user=ctx.user, status=TagRun.Status.OPEN,
+                                dimension=dimension).first()
+    if run and overlaps(*run.data.get("period", ["9999", "0000"])):
+        found.append("Your /tag preview isn't approved yet, so it isn't in these figures. Type approve (or approve "
+                     "high medium) to save it, then run this report again.")
+    return found
 
 
 def _start(value, dimension):
