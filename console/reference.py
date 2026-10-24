@@ -24,8 +24,11 @@ HOW_TO = {
                "(--bill) or customer (--invoice) for High, Low, New and Missing; with a name, number or code it "
                "shows that one over the last 12 months (up to 24 with a period range). --by account groups by "
                "account; --detail lists the documents. Use /inv <number> to open any document it lists.",
-    "recon": "Unreconciled Xero transactions per bank account and the oldest date. Xero's dashboard count of "
-             "statement lines can be higher; see the note in the result.",
+    "reconcile": "Month-end balance sheet reconciliation before the management accounts go out. /reconcile --Sep "
+                 "2026 lists every account to reconcile with its status; /reconcile 090 --Sep 2026 opens a working "
+                 "paper: enter the statement or supporting balance, add reconciling items, then prepared and "
+                 "reviewed. Methods and materiality are set per account in Admin > Chart of accounts. /reconcile "
+                 "--bank shows today's unreconciled Xero items.",
     "inv": "Open one invoice, bill or credit note by its number, with lines, payments and amount due.",
     "find": "Search contacts and invoice or bill numbers and references, e.g. /find smith.",
     "dim": "See what you can tag by before tagging: Xero's tracking categories (Xero allows 2 active and 4 in all) "
@@ -50,7 +53,8 @@ HOW_TO = {
     "use": "Switch organisation, e.g. /use TECC. Commands then read that organisation.",
     "connect": "Connect or reconnect Xero. Also grants any new permissions iLA needs (it will say when).",
     "clean": "Clear the results on screen. Your command history (up arrow) is kept.",
-    "cancel": "Drop your open /tag preview, /createTag or /_createInvoice draft. Nothing is saved or written anywhere.",
+    "cancel": "Drop your open /tag preview, /createTag or /_createInvoice draft, or close a /reconcile working "
+              "paper. Nothing is saved or written anywhere.",
     "help": "List every command (including your organisation's built ones), or /help <command> for its options.",
 }
 

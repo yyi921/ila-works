@@ -14,6 +14,8 @@ from .builder import active_commands
 from .output import DATE, MONEY, NUMBER, PCT, TEXT, Column, Figure, Figures, Note, Result, Table
 from .output import fmt_money as _m
 from .periods import Period, add_months, fmt, month_period, window
+from .reconcile import RECON_NOTE
+from .reconcile import recon_table as _recon_table
 from .registry import COMMANDS, CommandError, as_at_date, command, lookup, positive_int, read_params
 
 ZERO = Decimal("0")
@@ -837,38 +839,27 @@ def _compare_measures(ctx, params, measures):
     return result
 
 
-# --- Bank reconciliation ---------------------------------------------------------------------------------------
-
-
-RECON_NOTE = (
-    "These are transactions and payments entered in Xero but not yet reconciled. Xero's dashboard count is "
-    "different: it counts bank feed statement lines still waiting to be matched, and Xero only shares those "
-    "through a restricted API that needs Xero's approval. Check Xero's reconcile screen for that number."
-)
-
-
-def _recon_table(unreconciled):
-    table = Table([Column("Bank account"), Column("Unreconciled items", NUMBER), Column("Net amount", MONEY),
-                   Column("Oldest unreconciled", DATE)], title="Bank reconciliation")
-    for u in sorted(unreconciled, key=lambda u: u["account"]):
-        table.add(u["account"], u["count"], u["amount"], u["oldest"])
-    return table
+# --- Balance sheet reconciliation ---------------------------------------------------------------------------
 
 
 @command(
-    "recon",
-    summary="Bank reconciliation status per bank account.",
-    usage="/recon",
-    examples=["/recon"],
-    aliases=("rec",),
+    "reconcile",
+    summary="Month-end balance sheet reconciliation: each account's Xero balance against its support, with "
+            "reconciling items and preparer/reviewer sign-off.",
+    usage="/reconcile [<account>] [--<period>] | /reconcile --bank",
+    params=[
+        ("<account>", "Open one account's working paper by code or name, e.g. 090"),
+        ("--<period>", "The month to reconcile, e.g. Sep 2026 (its last day is the period end); default last month"),
+        ("--bank", "Bank accounts: Xero transactions not yet reconciled, today"),
+    ],
+    examples=["/reconcile", "/reconcile --Sep 2026", "/reconcile 090 --Sep 2026", "/reconcile --bank",
+              "/reconcile --Sep 2026 >> reconciliations.xlsx"],
+    aliases=("recon", "rec"),
 )
-def recon(ctx, cmd):
-    read_params(cmd, ctx)
-    result = Result(f"Bank reconciliation at {fmt(ctx.today)}", subtitle=ctx.settings["name"])
-    table = result.add(_recon_table(ctx.source.unreconciled()))
-    table.title = ""
-    result.add(Note(RECON_NOTE))
-    return result
+def reconcile(ctx, cmd):
+    from .reconcile import start
+
+    return start(ctx, cmd)
 
 
 # --- Lookups ---------------------------------------------------------------------------------------------------
@@ -1173,8 +1164,8 @@ def clean(ctx, cmd):
     return Result("Nothing to clear", subtitle="/clean clears the results shown in the console page.")
 
 
-@command("cancel", summary="Drop your open /splittag or /tag preview, /createTag or /_createInvoice draft. "
-                           "Nothing is saved.",
+@command("cancel", summary="Drop your open /splittag or /tag preview, /createTag or /_createInvoice draft, or "
+                           "close a /reconcile working paper. Nothing is saved.",
          usage="/cancel", examples=["/cancel"], needs_source=False)
 def cancel(ctx, cmd):
     read_params(cmd, ctx)

@@ -18,7 +18,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/debtors` | `/ar` | Receivables ageing by customer (by days past due date). | `/debtors [--detail] [--top <n>] [>> file.xlsx]` |
 | `/creditors` | `/ap` | Payables ageing by supplier (by days past due date). | `/creditors [--detail] [--top <n>] [>> file.xlsx]` |
 | `/bills` |  | Bills due in the next 7 days (or --due <days>), with overdue bills listed first. | `/bills [--due <days>] [--overdue] [>> file.xlsx]` |
-| `/recon` | `/rec` | Bank reconciliation status per bank account. | `/recon` |
+| `/reconcile` | `/recon`, `/rec` | Month-end balance sheet reconciliation: each account's Xero balance against its support, with reconciling items and preparer/reviewer sign-off. | `/reconcile [<account>] [--<period>] \| /reconcile --bank` |
 | `/compare` |  | Compare bills, invoices or a P&L measure month by month to spot unusual, new or missing amounts. | `/compare --bill\|--invoice [<number>] [--supplier\|--customer <name or code>] [--account <code or name>] [--by account] [--<period>] [--detail] [--min <amount>]   or   /compare --revenue\|--cos\|--gp\|--expenses\|--profit [--<period>]` |
 | `/inv` | `/invoice`, `/bill` | Show one invoice, bill or credit note by its number. | `/inv <number>` |
 | `/find` | `/search` | Search contacts, and invoices and bills by number or reference. | `/find <text>` |
@@ -29,7 +29,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/orgs` |  | List your organisations; * marks the one in use. | `/orgs` |
 | `/use` |  | Switch to another organisation. | `/use <name>` |
 | `/connect` |  | Connect or reconnect Xero (grants any new permissions). | `/connect` |
-| `/cancel` |  | Drop your open /splittag or /tag preview, /createTag or /_createInvoice draft. Nothing is saved. | `/cancel` |
+| `/cancel` |  | Drop your open /splittag or /tag preview, /createTag or /_createInvoice draft, or close a /reconcile working paper. Nothing is saved. | `/cancel` |
 | `/clean` | `/clear`, `/cls` | Clear the results on screen. Your command history (up arrow) is kept. | `/clean` |
 | `/help` | `/?` | List commands, or show how to use one: /help status. | `/help [command]` |
 
@@ -171,15 +171,29 @@ Examples:
 - `/bills --due 14`
 - `/bills --overdue >> overdue-bills.csv`
 
-### /recon
+### /reconcile
 
-Bank reconciliation status per bank account.
+Month-end balance sheet reconciliation: each account's Xero balance against its support, with reconciling items and preparer/reviewer sign-off.
 
-Usage: `/recon`
+Usage: `/reconcile [<account>] [--<period>] | /reconcile --bank`
+
+| Parameter | Meaning |
+| --- | --- |
+| `<account>` | Open one account's working paper by code or name, e.g. 090 |
+| `--<period>` | The month to reconcile, e.g. Sep 2026 (its last day is the period end); default last month |
+| `--bank` | Bank accounts: Xero transactions not yet reconciled, today |
 
 Examples:
 
-- `/recon`
+- `/reconcile`
+- `/reconcile --Sep 2026`
+- `/reconcile 090 --Sep 2026`
+- `/reconcile --bank`
+- `/reconcile --Sep 2026 >> reconciliations.xlsx`
+
+Also: `/recon`, `/rec`
+
+In an open working paper, type `statement <amount>` or `support <amount>`, `add [date] <amount> <description>`, `remove <n>`, `note <text>`, `prepared`, `reviewed`, `reopen`, `next` or `done`.
 
 ### /compare
 

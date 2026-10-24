@@ -173,6 +173,25 @@ class SplitRun(TenantModel):
         return f"Split run {self.pk} ({self.get_status_display()})"
 
 
+class ReconSession(TenantModel):
+    """An account's /reconcile working paper open in the console, so plain input (statement 1234.56, add ...,
+    prepared) goes to it. Closing it keeps the reconciliation; the figures live on core.Reconciliation."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        CLOSED = "closed", "Closed"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    reconciliation = models.ForeignKey("core.Reconciliation", on_delete=models.CASCADE, related_name="+")
+
+    class Meta(TenantModel.Meta):
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Working paper {self.reconciliation} ({self.get_status_display()})"
+
+
 class CommandReference(models.Model):
     """One native iLA command, as defined in code: syntax, parameters and examples. Refreshed from the command
     registry after every migrate and by ``manage.py sync_command_reference``, so it never drifts from what the

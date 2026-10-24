@@ -35,6 +35,19 @@ class LineAmountType(models.TextChoices):
     NO_TAX = "no_tax", "No tax"
 
 
+class ReconMethod(models.TextChoices):
+    """How a balance sheet account is reconciled at month end: what the Xero balance is compared with."""
+
+    BANK = "bank", "Bank statement"
+    SUBLEDGER = "subledger", "Debtors/creditors ledger"
+    NIL = "nil", "Should be nil"
+    SCHEDULE = "schedule", "Schedule"
+    FIXED_ASSETS = "fixed_assets", "Fixed asset register"
+    GST = "gst", "GST return"
+    INTERCOMPANY = "intercompany", "Intercompany"
+    NONE = "none", "Not reconciled"
+
+
 class Organisation(models.Model):
     """A customer organisation: the tenant. One organisation may later be connected to several source systems,
     so the per-system identifiers (e.g. Xero tenant ID) live on the connector's connection model."""
@@ -96,13 +109,25 @@ class Account(TenantModel):
     is_bank_account = models.BooleanField(default=False)
     tax_code = models.CharField(max_length=50, blank=True)
     currency_code = models.CharField(max_length=3, blank=True)
+    system_account = models.CharField(max_length=30, blank=True, help_text="e.g. DEBTORS, CREDITORS, GST.")
     is_active = models.BooleanField(default=True)
+    # Month-end balance sheet reconciliation, preset by an admin and kept when the chart is refreshed.
+    recon_method = models.CharField("reconciliation method", max_length=20, choices=ReconMethod.choices, blank=True)
+    recon_threshold = models.DecimalField(
+        "materiality threshold", max_digits=14, decimal_places=2, default=Decimal("0"),
+        help_text="A reconciliation is needed when the balance is at least this (either sign). 0 = any balance.")
 
     class Meta(TenantModel.Meta):
         indexes = [models.Index(fields=["organisation", "code"])]
+        verbose_name = "account (chart of accounts)"
+        verbose_name_plural = "chart of accounts"
 
     def __str__(self):
         return f"{self.code} {self.name}".strip()
+
+    @property
+    def is_balance_sheet(self):
+        return self.account_class in (self.AccountClass.ASSET, self.AccountClass.LIABILITY, self.AccountClass.EQUITY)
 
 
 class Contact(TenantModel):
@@ -848,3 +873,61 @@ class AuditLog(TenantModel):
 
     def __str__(self):
         return f"{self.created_at:%Y-%m-%d %H:%M} {self.action} {self.input[:40]}"
+
+
+# --- Balance sheet reconciliation -------------------------------------------------------------------------------
+
+
+class Reconciliation(TenantModel):
+    """One balance sheet account reconciled at one period end: the Xero balance, what supports it (a statement
+    balance, the ledger, a schedule), the reconciling items between them and who prepared and reviewed it.
+
+    The Xero balance should equal the supporting balance plus the reconciling items. ``items``: [{"description",
+    "amount", "date", "source": "manual" | "carried" | "xero"}], amounts signed the way they move the Xero balance.
+    Any change after sign-off clears it, and so does a change in the Xero balance, so a signed reconciliation
+    always matches the figure it was signed against."""
+
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="reconciliations")
+    period_end = models.DateField()
+    method = models.CharField(max_length=20, choices=ReconMethod.choices)
+    gl_balance = models.DecimalField(**MONEY, default=Decimal("0"), help_text="Xero balance when last worked on.")
+    support_balance = models.DecimalField(**MONEY, null=True, blank=True,
+                                          help_text="The supporting balance: the bank statement's closing balance, "
+                                                    "the ledger, a schedule or a third-party statement.")
+    items = models.JSONField(default=list, blank=True)
+    notes = models.TextField(blank=True)
+    prepared_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                    related_name="+")
+    prepared_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                    related_name="+")
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.UniqueConstraint(fields=["account", "period_end"], name="core_reconciliation_account_period_uniq"),
+        ]
+        ordering = ["period_end", "account__code"]
+
+    def __str__(self):
+        return f"{self.account} at {self.period_end:%d %b %Y}"
+
+    @property
+    def items_total(self):
+        return sum((Decimal(i["amount"]) for i in self.items), Decimal("0"))
+
+    @property
+    def difference(self):
+        """Unexplained: Xero balance less support less reconciling items. None until there's a supporting balance."""
+        if self.support_balance is None:
+            return None
+        return self.gl_balance - self.support_balance - self.items_total
+
+    @property
+    def self_reviewed(self):
+        return self.reviewed_by_id is not None and self.reviewed_by_id == self.prepared_by_id
+
+    def clear_signoff(self):
+        changed = bool(self.prepared_at or self.reviewed_at)
+        self.prepared_by = self.prepared_at = self.reviewed_by = self.reviewed_at = None
+        return changed
