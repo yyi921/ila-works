@@ -6,6 +6,9 @@ profiles (supplier or description × cost account × location/department), and f
 how the cost behaves, matches the bills that arrived after month end (billing lag, how close the accrual was),
 and writes a memo (what it found) and a rule (how iLA would accrue it).
 
+Thresholds come from the organisation's accrual set-up, so they can be changed in admin. A field a person changed
+on a profile is left alone, and a profile a person deleted is not brought back.
+
 Only iLA's copy of the ledger is read; ``copy_history`` brings the window across from Xero first. The source
 ledger is never changed.
 """
@@ -21,55 +24,31 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 
-from core.models import Account, BankTransactionLine, Contact, Document, DocumentLine, Journal, JournalLine
+from core.models import Account, Contact, Document, DocumentLine, Journal
 
-from .models import Accrual, AccrualProfile, Behaviour
+from .models import METHOD_FOR, Accrual, AccrualProfile, Behaviour
+from .util import CENT, add_months, money, month_end, month_start, months_between, pct
 
 MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_name) if m} | \
          {m.lower(): i for i, m in enumerate(calendar.month_abbr) if m} | {"sept": 9}
-NOISE = {"accrue", "accrued", "accrual", "accruals", "accr", "acc", "for", "of", "the", "to", "and", "month",
-         "mth", "monthly", "inv", "invoice", "est", "estimate", "estimated", "reversal", "reverse", "reversing",
-         "reversed", "fy", "period", "per", "on", "in", "re", "a"}
 COMPANY_WORDS = {"pty", "ltd", "limited", "inc", "co", "the", "australia", "aust", "group", "holdings", "trust",
                  "corporation", "corp", "services", "service"}
-DRIVER_WORDS = {"event", "events", "function", "functions", "security", "laundry", "linen", "room", "rooms",
-                "covers", "casual", "casuals", "labour", "labor", "staffing", "agency", "hire"}
 DRIVER_CATEGORY_WORDS = ("event", "function", "job", "project")
-FIXED_CV = 0.05             # month-to-month variation below this is a fixed amount
-MATCH_TOLERANCE = 0.35      # a bill within 35% of the accrual is taken as the bill for it
-BILL_WINDOW_DAYS = 75       # bills dated up to this long after month end can be the bill for an accrual
-DORMANT_MONTHS = 6
 ZERO = Decimal("0")
-CENT = Decimal("0.01")
-
-
-def month_start(d):
-    return d.replace(day=1)
-
-
-def month_end(d):
-    return d.replace(day=calendar.monthrange(d.year, d.month)[1])
-
-
-def add_months(d, n):
-    y, m = divmod(d.month - 1 + n, 12)
-    return date(d.year + y, m + 1, 1)
-
-
-def months_between(a, b):
-    return (b.year - a.year) * 12 + b.month - a.month
 
 
 def words(text):
     return re.findall(r"[a-z][a-z&']*", (text or "").lower())
 
 
-def description_key(text):
+def description_key(text, ignore=None):
     """What a description says once months, years, numbers and accrual words are taken out: 'Accrue Origin
     electricity Sep-26' and 'Origin Electricity accrual October 2026' both give 'origin electricity'."""
+    if ignore is None:
+        ignore = Accrual().ignore_word_set
     seen, kept = set(), []
     for w in words(text):
-        if w in NOISE or w in MONTHS or len(w) < 2 or w in seen:
+        if w in ignore or w in MONTHS or len(w) < 2 or w in seen:
             continue
         seen.add(w)
         kept.append(w)
@@ -80,12 +59,10 @@ def company_tokens(name):
     return [w for w in words(name) if w not in COMPANY_WORDS]
 
 
-def money(value):
-    return f"${Decimal(value).quantize(Decimal('1')):,}"
-
-
-def pct(value):
-    return f"{value:.0%}"
+def driver_noun(category_name):
+    """What one driver option is: 'Event' for an Events Department category."""
+    name = category_name.lower()
+    return next((w.title() for w in DRIVER_CATEGORY_WORDS if w in name), category_name)
 
 
 @dataclass
@@ -112,6 +89,7 @@ class Group:
     raises: list = field(default_factory=list)
     releases: list = field(default_factory=list)
     driver_options: Counter = field(default_factory=Counter)
+    driver_category: object = None
     driver_by_month: dict = field(default_factory=lambda: defaultdict(set))
 
 
@@ -132,10 +110,30 @@ def default_window(history_months, today=None):
 
 
 def copy_history(accrual, source, start, end):
-    """Copy bills, credit notes, bank transactions and manual journals for the window from the source system."""
+    """Copy bills, credit notes, bank transactions and manual journals for the window from the source system,
+    plus the bill window after it."""
     from xero.sync import copy_period
 
+    end = min(end + timedelta(days=accrual.bill_window_days), timezone.localdate())
     return copy_period(accrual.organisation, source, ("bills", "credits", "bank", "journals"), start, end)
+
+
+def bills_for(organisation, accounts, start, end, supplier=None):
+    """Posted bills with lines on any of ``accounts`` dated ``start``–``end``: [(date, contact, document, net)],
+    net being the total of those lines before tax."""
+    lines = (DocumentLine.objects
+             .filter(organisation=organisation, document__type=Document.Type.BILL,
+                     document__status__in=(Document.Status.AUTHORISED, Document.Status.PAID),
+                     document__date__range=(start, end), account__in=accounts)
+             .select_related("document__contact"))
+    if supplier is not None:
+        lines = lines.filter(document__contact=supplier)
+    docs = {}
+    for line in lines:
+        doc = line.document
+        net = line.line_amount - (line.tax_amount if doc.line_amount_type == "inclusive" else ZERO)
+        docs.setdefault(doc.pk, [doc.date, doc.contact, doc, ZERO])[3] += net
+    return [tuple(v) for v in docs.values()]
 
 
 class _Scanner:
@@ -146,6 +144,12 @@ class _Scanner:
         chosen = list(accrual.driver_categories.all()) if accrual.pk else []
         self.driver_category_ids = {c.pk for c in chosen}
         self.auto_driver = not chosen
+        self.ignore = accrual.ignore_word_set
+        self.driver_words = accrual.driver_word_set
+        self.fixed_cv = float(accrual.fixed_variation) / 100
+        self.coverage = float(accrual.recurring_coverage) / 100
+        self.tolerance = Decimal(accrual.bill_tolerance) / 100
+        self.window = accrual.bill_window_days
         self.suppliers = self._suppliers()
         self.summary = Counter()
 
@@ -180,7 +184,7 @@ class _Scanner:
 
     def postings(self):
         journals = (Journal.objects.filter(organisation=self.org, status=Journal.Status.POSTED,
-                                           date__range=(self.start, end_of_bills(self.end)),
+                                           date__range=(self.start, self.end + timedelta(days=self.window)),
                                            lines__account__in=list(self.accrual_ids))
                     .distinct().prefetch_related("lines__account", "lines__tracking__category"))
         for journal in journals:
@@ -205,16 +209,17 @@ class _Scanner:
             supplier = self._named_supplier(p.description)
             location = sorted((o for o in p.tracking if not self._is_driver(o)), key=lambda o: o.pk)
             drivers = [o for o in p.tracking if self._is_driver(o)]
-            what = f"s{supplier.pk}" if supplier else f"d:{description_key(p.description)}"
-            key = f"{p.account.code or p.account.pk}|{what}|{','.join(str(o.pk) for o in location)}"
+            label = description_key(p.description, self.ignore)
+            what = f"s{supplier.pk}" if supplier else f"d:{label}"
+            key = f"{p.account.code or p.account.pk}|{what}|{','.join(str(o.pk) for o in location)}"[:255]
             g = groups.get(key)
             if g is None:
-                g = groups[key] = Group(key, p.account, supplier, "description" if supplier else "",
-                                        description_key(p.description), location)
+                g = groups[key] = Group(key, p.account, supplier, "description" if supplier else "", label, location)
             if raised:
                 g.raises.append(p)
                 for o in drivers:
                     g.driver_options[o.name] += 1
+                    g.driver_category = g.driver_category or o.category
                     g.driver_by_month[month_start(p.date)].add(o.pk)
             else:
                 g.releases.append(p)
@@ -222,38 +227,20 @@ class _Scanner:
 
     # --- Bills that arrived after month end ---
 
-    def bills(self, account, supplier):
-        """Bill lines on ``account`` (or coded straight to the accrual account) dated in the window and up to
-        BILL_WINDOW_DAYS after it: [(date, contact, document, net amount)]."""
-        lines = (DocumentLine.objects
-                 .filter(organisation=self.org, document__type=Document.Type.BILL,
-                         document__status__in=(Document.Status.AUTHORISED, Document.Status.PAID),
-                         document__date__range=(self.start, end_of_bills(self.end)))
-                 .filter(account__in=[account.pk, *self.accrual_ids])
-                 .select_related("document__contact"))
-        if supplier is not None:
-            lines = lines.filter(document__contact=supplier)
-        docs = {}
-        for line in lines:
-            doc = line.document
-            net = line.line_amount - (line.tax_amount if doc.line_amount_type == "inclusive" else ZERO)
-            row = docs.setdefault(doc.pk, [doc.date, doc.contact, doc, ZERO])
-            row[3] += net
-        return list(docs.values())
-
     def match_bills(self, g, monthly):
         """For each accrued month, the bill that most likely settled it. Finds the supplier from the bills when
         the description didn't name one."""
-        candidates = self.bills(g.account, g.supplier)
+        candidates = bills_for(self.org, [g.account.pk, *self.accrual_ids], self.start,
+                               self.end + timedelta(days=self.window), g.supplier)
         matches = {}
         for month, amount in monthly.items():
             close = month_end(month)
             best = None
             for bill_date, contact, doc, net in candidates:
-                if not (close < bill_date <= close + timedelta(days=BILL_WINDOW_DAYS)) or net <= 0:
+                if not (close < bill_date <= close + timedelta(days=self.window)) or net <= 0:
                     continue
                 gap = abs(net - amount) / amount
-                if gap <= MATCH_TOLERANCE and (best is None or gap < best[0]):
+                if gap <= self.tolerance and (best is None or gap < best[0]):
                     best = (gap, bill_date, contact, doc, net)
             if best:
                 matches[month] = best
@@ -281,49 +268,59 @@ class _Scanner:
         gaps = [months_between(a, b) for a, b in zip(months, months[1:])]
         mean = statistics.fmean(amounts)
         cv = statistics.pstdev(amounts) / mean if n > 1 and mean else 0.0
-        trailing = statistics.fmean(amounts[-3:])
-        stats = {"mean": round(mean, 2), "median": round(statistics.median(amounts), 2), "min": round(min(amounts), 2),
-                 "max": round(max(amounts), 2), "variation": round(cv, 3), "trailing_3": round(trailing, 2),
-                 "coverage": round(n / span, 2), "median_gap_months": statistics.median(gaps) if gaps else None,
+        trailing = statistics.fmean(amounts[-self.accrual.trailing_months:])
+        stats = {"mean": round(mean, 2), "median": round(statistics.median(amounts), 2),
+                 "min": round(min(amounts), 2), "max": round(max(amounts), 2), "variation": round(cv, 3),
+                 "trailing": round(trailing, 2), "coverage": round(n / span, 2),
+                 "median_gap_months": statistics.median(gaps) if gaps else None,
                  "by_month": {m.strftime("%Y-%m"): float(a) for m, a in monthly.items()}}
 
         matches = self.match_bills(g, monthly)
         lags = [(m[1] - month_end(month)).days for month, m in matches.items()]
         errors = [float(m[0]) for m in matches.values()]
         released = self._released(g, monthly)
-        cleared = sum(1 for m in matches.values() if any(l.account_id in self.accrual_ids
-                                                        for l in m[3].lines.all()))
+        cleared = sum(1 for m in matches.values() if m[3].lines.filter(account__in=self.accrual_ids).exists())
 
         behaviour, driver = self.behaviour(g, n, span, gaps, cv)
-        if behaviour == Behaviour.VARIABLE and n >= 12:
-            stats["seasonality"] = seasonality(monthly)
+        seasonal = seasonality(monthly) if behaviour == Behaviour.VARIABLE and n >= 12 else {}
+        if seasonal:
+            stats["seasonality"] = seasonal
+        driver_rate = None
         if behaviour == Behaviour.DRIVER and g.driver_by_month:
             counts = [len(g.driver_by_month.get(m, ())) for m in months]
             per = [a / c for a, c in zip(amounts, counts) if c]
             if per:
-                stats["driver_rate"] = round(statistics.fmean(per), 2)
-                stats["driver_count"] = len(g.driver_options)
+                driver_rate = round(statistics.fmean(per), 2)
+                stats["driver_rate"], stats["driver_count"] = driver_rate, len(g.driver_options)
 
-        dormant = months_between(last, month_start(self.end)) >= DORMANT_MONTHS
+        dormant = months_between(last, month_start(self.end)) >= self.accrual.dormant_months
         lag = statistics.median(lags) if lags else None
         lag_std = statistics.pstdev(lags) if len(lags) > 1 else None
         mape = statistics.fmean(errors) if errors else None
         confidence = self.confidence(behaviour, n, span, gaps, mape, driver)
-        name = self.name(g)
-        facts = Facts(g, name, behaviour, driver, monthly, stats, n, span, first, last, lag, lag_std, len(lags),
-                      mape, released, cleared, dormant)
-        rule = make_rule(facts, self.accrual)
+        facts = Facts(g, behaviour, driver, monthly, stats, n, span, first, last, lag, lag_std, len(lags), mape,
+                      released, cleared, dormant, self.accrual)
+        method = METHOD_FOR[behaviour]
+        amount = {Behaviour.FIXED: stats["median"], Behaviour.VARIABLE: stats["trailing"],
+                  Behaviour.DRIVER: stats["trailing"], Behaviour.PERIODIC: stats["median"]}.get(behaviour)
+        learned = {"method": method, "amount": amount, "driver": driver, "driver_rate": driver_rate,
+                   "seasonality": seasonal, "billing_lag_days": lag}
         return {
-            "key": g.key[:255], "name": name[:255], "detected_behaviour": behaviour, "supplier": g.supplier,
-            "supplier_found_by": g.supplier_found_by, "account": g.account, "location": g.location,
-            "driver": driver, "months_accrued": n, "first_month": first, "last_month": last,
+            "key": g.key, "name": self.name(g)[:255], "detected_behaviour": behaviour, "behaviour": behaviour,
+            "supplier": g.supplier, "supplier_found_by": g.supplier_found_by, "account": g.account,
+            "tracking": g.location, "method": method,
+            "amount": Decimal(str(amount)).quantize(CENT) if amount is not None else None,
+            "driver": driver, "driver_category": g.driver_category if driver and driver != "to be confirmed" else None,
+            "driver_rate": Decimal(str(driver_rate)).quantize(CENT) if driver_rate is not None else None,
+            "seasonality": seasonal, "billing_lag_days": lag, "reverse_next_month": True,
+            "skip_if_bill_posted": True, "memo": memo(facts),
+            "months_accrued": n, "first_month": first, "last_month": last,
             "average": Decimal(str(mean)).quantize(CENT), "last_amount": monthly[last].quantize(CENT),
-            "amount_model": stats, "billing_lag_days": lag, "lag_std": lag_std, "accuracy_mape": mape,
-            "confidence": confidence, "is_current": not dormant, "memo": memo(facts), "rule": rule,
-            "rule_text": rule_text(rule, facts),
+            "amount_model": stats, "lag_std": lag_std, "accuracy_mape": mape, "confidence": confidence,
+            "is_current": not dormant, "rule": {k: v for k, v in learned.items() if v not in (None, "", {})},
             "evidence": [{"date": p.date.isoformat(), "reference": p.reference, "amount": float(p.amount),
-                          "description": p.description[:200]} for p in sorted(g.raises + g.releases,
-                                                                              key=lambda p: p.date)][-60:],
+                          "description": p.description[:200]}
+                         for p in sorted(g.raises + g.releases, key=lambda p: p.date)][-60:],
         }
 
     def _released(self, g, monthly):
@@ -338,10 +335,10 @@ class _Scanner:
 
     def behaviour(self, g, n, span, gaps, cv):
         driver = ""
-        if sum(g.driver_options.values()) >= len(g.raises) / 2 and len(g.driver_options) >= 3:
-            driver = next(iter(driver_noun(o.category.name) for p in g.raises for o in p.tracking
-                               if self._is_driver(o)), "")
-        elif n >= 3 and (DRIVER_WORDS & set(g.label.split())):
+        if (sum(g.driver_options.values()) >= len(g.raises) / 2
+                and len(g.driver_options) >= self.accrual.min_driver_options):
+            driver = driver_noun(g.driver_category.name)
+        elif n >= 3 and (self.driver_words & set(g.label.split())):
             driver = "to be confirmed"
         if driver and n >= 3:
             return Behaviour.DRIVER, driver
@@ -350,8 +347,8 @@ class _Scanner:
         median_gap = statistics.median(gaps)
         if median_gap >= 2 and all(abs(x - median_gap) <= 1 for x in gaps):
             return Behaviour.PERIODIC, ""
-        if median_gap == 1 and n / span >= 0.6:
-            return (Behaviour.FIXED if cv <= FIXED_CV else Behaviour.VARIABLE), ""
+        if median_gap == 1 and n / span >= self.coverage:
+            return (Behaviour.FIXED if cv <= self.fixed_cv else Behaviour.VARIABLE), ""
         return Behaviour.ONE_OFF, ""
 
     @staticmethod
@@ -377,16 +374,6 @@ class _Scanner:
         return f"{what} — {g.account.code} {g.account.name}" + (f" ({where})" if where else "")
 
 
-def driver_noun(category_name):
-    """What one driver option is: 'Event' for an Events Department category."""
-    name = category_name.lower()
-    return next((w.title() for w in DRIVER_CATEGORY_WORDS if w in name), category_name)
-
-
-def end_of_bills(end):
-    return end + timedelta(days=BILL_WINDOW_DAYS)
-
-
 def seasonality(monthly):
     """Calendar month → index against the overall average (1.2 = 20% above), for months seen at least once."""
     overall = statistics.fmean(float(a) for a in monthly.values())
@@ -399,7 +386,6 @@ def seasonality(monthly):
 @dataclass
 class Facts:
     group: Group
-    name: str
     behaviour: str
     driver: str
     monthly: dict
@@ -415,6 +401,7 @@ class Facts:
     released: dict
     cleared: int
     dormant: bool
+    accrual: Accrual
 
 
 def memo(f):
@@ -429,11 +416,12 @@ def memo(f):
     else:
         lines = [f"Accrued to {to} in {f.n} of the {f.span} months from {f.first:%b %Y} to {f.last:%b %Y}."]
     if f.behaviour == Behaviour.FIXED:
-        lines.append(f"The same amount each time: {money(s['median'])} (varied by under {pct(FIXED_CV)}).")
+        lines.append(f"The same amount each time: {money(s['median'])} (varied by under "
+                     f"{f.accrual.fixed_variation:g}%).")
     elif f.behaviour == Behaviour.VARIABLE:
-        lines.append(f"Average {money(s['mean'])}, from "
-                     f"{money(s['min'])} to {money(s['max'])} (varies {pct(s['variation'])} month to month); "
-                     f"last three months average {money(s['trailing_3'])}.")
+        lines.append(f"Average {money(s['mean'])}, from {money(s['min'])} to {money(s['max'])} (varies "
+                     f"{pct(s['variation'])} month to month); last {f.accrual.trailing_months} months average "
+                     f"{money(s['trailing'])}.")
         season = s.get("seasonality") or {}
         high = [m for m, v in season.items() if v >= 1.15]
         low = [m for m, v in season.items() if v <= 0.85]
@@ -466,8 +454,9 @@ def memo(f):
         if g.supplier_found_by == "bills":
             lines.append("Supplier worked out from the bills that followed, not named in the journals.")
     elif f.behaviour != Behaviour.ONE_OFF:
-        lines.append("No bill within 35% of the accrual was found after month end: check how this cost is "
-                     "billed (consolidated bill, different account, or paid by direct debit).")
+        lines.append(f"No bill within {f.accrual.bill_tolerance:g}% of the accrual was found after month end: "
+                     "check how this cost is billed (consolidated bill, different account, or paid by direct "
+                     "debit).")
     if f.released:
         days = Counter(f.released.values()).most_common(1)[0][0]
         lines.append(f"Reversed on day {days} of the next month in {len(f.released)} of {f.n} months.")
@@ -480,89 +469,39 @@ def memo(f):
     return " ".join(lines)
 
 
-def make_rule(f, accrual):
-    g, s = f.group, f.stats
-    base = {"account": g.account.code, "tracking": [o.name for o in g.location],
-            "supplier": g.supplier.name if g.supplier else None, "reverse": "first day of next month",
-            "skip_if_bill_posted": True, "materiality": float(accrual.materiality)}
-    if f.lag is not None:
-        base["expected_bill_lag_days"] = f.lag
-    if f.behaviour == Behaviour.FIXED:
-        return base | {"method": "fixed", "amount": s["median"]}
-    if f.behaviour == Behaviour.VARIABLE:
-        return base | {"method": "run_rate", "basis": "trailing 3-month average", "amount": s["trailing_3"],
-                       "seasonality": s.get("seasonality")}
-    if f.behaviour == Behaviour.DRIVER:
-        return base | {"method": "driver_rate", "driver": f.driver, "rate": s.get("driver_rate"),
-                       "fallback": "trailing 3-month average", "fallback_amount": s["trailing_3"]}
-    if f.behaviour == Behaviour.PERIODIC:
-        return {"method": "prepayment", "account": g.account.code, "cadence_months": s["median_gap_months"],
-                "typical_amount": s["median"], "next_expected": add_months(f.last, int(s["median_gap_months"]))
-                .strftime("%Y-%m"), "supplier": base["supplier"]}
-    return {"method": "evidence_only", "account": g.account.code, "sources": ["cut-off scan", "PO", "user input"],
-            "supplier": base["supplier"]}
-
-
-def rule_text(rule, f):
-    method = rule["method"]
-    tail = ""
-    if "expected_bill_lag_days" in rule:
-        tail = (f" Skip it if the bill is already posted; it usually arrives {rule['expected_bill_lag_days']:g} days "
-                "after month end.")
-    if method not in ("evidence_only", "prepayment") and f.stats["mean"] < rule["materiality"]:
-        tail += f" Below the {money(rule['materiality'])} materiality floor, so not proposed."
-    if f.dormant and method not in ("evidence_only", "prepayment"):
-        tail += " Paused: not accrued for six months; confirm it still applies."
-    dest = f"Dr {rule['account']}" + (f" ({', '.join(rule['tracking'])})" if rule.get("tracking") else "")
-    if method == "fixed":
-        return f"Accrue {money(rule['amount'])} every month, {dest} / Cr accruals, reversed on day 1.{tail}"
-    if method == "run_rate":
-        season = " × the month's seasonal index" if rule.get("seasonality") else ""
-        return (f"Accrue the last three months' average ({money(rule['amount'])}){season}, {dest} / Cr accruals, "
-                f"reversed on day 1.{tail}")
-    if method == "driver_rate":
-        if rule.get("rate"):
-            return (f"Accrue {money(rule['rate'])} per {rule['driver'].lower()} held in the month, {dest} / Cr "
-                    f"accruals, reversed on day 1.{tail}")
-        return (f"Accrue driver volume × rate once the driver is confirmed; until then the last three months' "
-                f"average ({money(rule['fallback_amount'])}), {dest}.{tail}")
-    if method == "prepayment":
-        return (f"Don't accrue monthly. Every {rule['cadence_months']:g} months (next {rule['next_expected']}), "
-                f"spread about {money(rule['typical_amount'])} over the period it covers: prepay if billed in "
-                "advance, accrue monthly portions if billed in arrears.")
-    return "Only accrue when there is evidence: a bill found in the cut-off scan, a PO receipt, or a user's note."
-
-
 @transaction.atomic
 def scan(accrual, start=None, end=None):
-    """Learn profiles from the accrual account's history and save them. Reviewer choices (behaviour changed,
-    notes, switched off) are kept. Returns a ScanResult."""
+    """Learn profiles from the accrual account's history and save them. Fields a person changed (kept_fields),
+    notes and Active are kept; deleted profiles stay deleted; profiles no longer in the history are marked not
+    recent rather than removed. Returns a ScanResult."""
     if start is None or end is None:
         start, end = default_window(accrual.history_months)
     scanner = _Scanner(accrual, start, end)
     if not scanner.accrual_accounts:
         raise ValueError(f"No account with code {accrual.account_codes} in {accrual.organisation}'s chart of "
                          "accounts. Refresh the chart from Xero or fix the accrual account code.")
+    excluded = set(Accrual.objects.values_list("excluded_keys", flat=True).get(pk=accrual.pk) or [])
     found = [scanner.profile(g) for g in scanner.group()]
     existing = {p.key: p for p in accrual.profiles.all()}
     saved = []
     for data in found:
-        location = data.pop("location")
+        if data["key"] in excluded:
+            scanner.summary["deleted_by_you"] += 1
+            continue
+        tracking = data.pop("tracking")
         row = existing.pop(data["key"], None) or AccrualProfile(organisation=accrual.organisation, accrual=accrual)
-        keep = row.pk is not None and row.behaviour != row.detected_behaviour
+        kept = set(row.kept_fields) if row.pk else set()
         for k, v in data.items():
-            setattr(row, k, v)
-        if not keep:
-            row.behaviour = row.detected_behaviour
+            if k not in kept:
+                setattr(row, k, v)
         row.save()
-        row.tracking.set(location)
+        if "tracking" not in kept:
+            row.tracking.set(tracking)
+            row.save(update_fields=["rule_text"])
         saved.append(row)
     for row in existing.values():  # no longer in the history
-        if row.is_reviewed:
-            row.is_current = False
-            row.save(update_fields=["is_current", "updated_at"])
-        else:
-            row.delete()
+        row.is_current = False
+        row.save()
 
     by_behaviour = Counter(p.behaviour for p in saved)
     summary = dict(scanner.summary) | {
@@ -571,5 +510,5 @@ def scan(accrual, start=None, end=None):
         "accounts": [str(a) for a in scanner.accrual_accounts]}
     accrual.last_scanned_at, accrual.scanned_from, accrual.scanned_to = timezone.now(), start, end
     accrual.scan_summary = summary
-    accrual.save()
+    accrual.save(update_fields=["last_scanned_at", "scanned_from", "scanned_to", "scan_summary", "updated_at"])
     return ScanResult(accrual, start, end, summary, saved)

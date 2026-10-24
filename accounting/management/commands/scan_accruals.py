@@ -5,7 +5,8 @@ from django.core.management.base import BaseCommand, CommandError
 from core.models import Organisation
 
 from accounting.models import Accrual
-from accounting.scan import add_months, copy_history, default_window, month_start, scan
+from accounting.scan import copy_history, default_window, scan
+from accounting.util import add_months, month_start
 
 
 class Command(BaseCommand):
