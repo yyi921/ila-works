@@ -4,7 +4,7 @@ A practical guide to the iLA console: what each command is for, how to type it, 
 full list of parameters with examples, see [Command reference](Command%20reference.md), or type `/help <command>` in
 the console.
 
-_Last updated: 24 October 2026 (added `/reconcile`, which replaces `/recon`, and the chart of accounts in admin)._
+_Last updated: 24 October 2026 (`/reconcile` schedules from a CSV, and accruals from the Expectation Ledger)._
 
 ---
 
@@ -88,6 +88,7 @@ Quarters and financial years follow the year end set in Xero.
 | Reconcile the bank account to the statement | `/reconcile 090 --Sep 2026`, then `statement 12,345.67` |
 | Sign a reconciliation as prepared or reviewed | `prepared` / `reviewed` in its working paper |
 | Save the reconciliation pack for the month-end file | `/reconcile --Sep 2026 >> reconciliations.xlsx` |
+| Support prepayments, accruals or a loan with a schedule | `/reconcile --template`, then `/reconcile --Sep 2026 << schedules.csv` |
 | Check how many Xero items are still unreconciled today | `/reconcile --bank` |
 | Spot unusual or missing supplier bills | `/compare --bill` |
 | Look at one supplier over 12 months | `/compare --bill Origin Energy` |
@@ -168,7 +169,7 @@ Quarters and financial years follow the year end set in Xero.
 - **Purpose:** before the management accounts go out, check that every material balance sheet account is supported:
   the Xero balance against a bank statement, the debtors or creditors ledger, nil, or a schedule or third-party
   statement, with the reconciling items between them and a preparer and reviewer sign-off. **Xero isn't changed.**
-- **Syntax:** `/reconcile [<account>] [--<period>] [>> file.xlsx]` · `/reconcile --bank`
+- **Syntax:** `/reconcile [<account>] [--<period>] [<< schedule.csv] [>> file.xlsx]` · `/reconcile --template` · `/reconcile --bank`
 - **Set-up (admin, once per organisation):** the chart of accounts is loaded from Xero when the organisation
   connects. In Admin → **Chart of accounts** (filter by organisation) set each balance sheet account's
   **reconciliation method** and **materiality threshold**; both can be edited straight in the list. iLA proposes a
@@ -186,6 +187,7 @@ Quarters and financial years follow the year end set in Xero.
   | Type | What it does |
   | --- | --- |
   | `statement 12,345.67` or `support 5,000` | The supporting balance: bank statement closing balance, lender statement, schedule total |
+  | `<< schedule.csv` | The schedule for this account (see Schedules below); replaces any earlier one |
   | `add -250.00 Unpresented cheque 123` | A reconciling item; a date first is optional: `add 30/09/2026 1,200 Deposit in transit` |
   | `remove 2` (or `remove 1-3`) | Remove items you added or brought forward |
   | `note Per ANZ statement 30/09` | A note kept with the working paper (brought forward next month for schedules) |
@@ -206,8 +208,38 @@ Quarters and financial years follow the year end set in Xero.
     overpayments and prepayments, worked back from today using what was paid or allocated after the period end.
     Tested to the cent against TECC and the Demo Company at three month ends.
   - **Should be nil:** the balance itself is the difference. A nil balance needs no sign-off.
-  - **Schedule, Fixed asset register, GST return, Intercompany:** for now, enter the supporting balance with
-    `support`. Uploading schedules and the automatic versions are coming next.
+  - **Schedule, Fixed asset register, GST return, Intercompany:** upload a schedule (below) or type the
+    supporting balance with `support`. Automatic GST, fixed asset and intercompany checks are coming next.
+- **Schedules** (prepayments, accruals, deferred income, loans, payroll liabilities, or anything listed line by
+  line):
+  1. `/reconcile --template` and download `schedule-template.csv`.
+
+     | Column | What goes in it |
+     | --- | --- |
+     | Account | The account code, e.g. `1400`. Can be left out when the command names the account. |
+     | Description | What the line is, e.g. Public liability insurance. |
+     | Reference | Optional: invoice, contract or loan number. |
+     | Amount | The line's balance at the period end, signed as Xero's balance sheet shows the account. |
+     | From, To | Optional: the period the line covers. A line whose **To** date is on or before the period end is flagged, since a prepayment that has run out should be nil. |
+     | Notes | Optional: how it was worked out, e.g. 9 of 12 months left. |
+
+  2. One file for several accounts: `/reconcile --Sep 2026 << schedules.csv` shows each account's schedule total
+     against Xero. One account: `/reconcile 1400 --Sep 2026 << prepayments.csv` opens its working paper with the
+     lines. In an open working paper, `<< prepayments.csv` replaces its schedule.
+  3. The schedule total becomes the supporting balance. Explain any difference with `add`, then `prepared`.
+  - Every problem in the file is listed together (row by row) and **nothing is saved** until the file is right.
+  - The file itself isn't kept: iLA keeps the lines, the file name, who uploaded it, when, and its SHA-256
+    fingerprint (in the working paper and the audit log).
+  - Uploading again replaces the schedule and clears any sign-off. Typing `support` instead removes the schedule.
+  - A schedule is for one month: next month, upload next month's (reconciling items still roll forward).
+- **Accruals from the Expectation Ledger:** the account accrual runs post to (the first code in Admin →
+  Accounting → Accruals, e.g. TECC 2000) takes its schedule automatically from that month's accrual journal in the
+  Expectation Ledger: the lines marked **posted** (or since **closed**), since those are the ones in Xero at month
+  end. Lines still predicted or evidenced aren't counted; the working paper says how many and how much, so you can
+  mark the journal posted in admin if it is in Xero. Until it's signed, the schedule follows changes in the ledger;
+  once prepared, it's frozen. Uploading a schedule or typing `support` for the account replaces the link for that
+  month. Accruals made outside the Expectation Ledger (e.g. a manual journal) show as a difference: explain them
+  with `add`.
 - **Roll forward:** opening a working paper for a new month brings forward last month's items you added (and for
   schedules, the note), marked "Brought forward"; remove the ones that have cleared.
 - **`/reconcile --bank`:** today's unreconciled Xero items per bank account and the oldest date (what `/recon` used
@@ -504,8 +536,7 @@ Nothing is written to Xero; a person imports the file.
 
 Planned, not built yet:
 
-- **`/reconcile` next steps:** upload schedules (prepayments, accruals, deferred income, loans, payroll
-  liabilities) from a CSV; GST against Xero's GST figures; fixed assets against Xero's asset register (needs a new
+- **`/reconcile` next steps:** GST against Xero's GST figures; fixed assets against Xero's asset register (needs a new
   Xero permission, so one reconnect); intercompany balances between two connected organisations; attaching
   evidence; stamping the signed pack.
 - `/split`: reclassify amounts between GL accounts (e.g. COGS into food and beverage) as a Xero manual journal import file that you check, stamp and import, using the same CSV and rules as `/splittag`. Xero is never posted to directly.
@@ -523,6 +554,8 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 24 Oct 2026 | `/reconcile`: the accrual account (e.g. 2000) takes its schedule from the Expectation Ledger's posted accrual lines for the month. |
+| 24 Oct 2026 | `/reconcile` schedules: `/reconcile --template`, and `<< schedule.csv` for one account or (with an Account column) several; the total is the supporting balance, lines with an ended period are flagged. |
 | 24 Oct 2026 | Added `/reconcile` (balance sheet reconciliation with working papers and sign-off); `/recon` and `/rec` now open it and the old bank status is `/reconcile --bank`. Chart of accounts in admin, with reconciliation method and materiality per account. |
 | 17 Oct 2026 | Guide created, covering all native commands, built commands and `/dim`. |
 | 17 Oct 2026 | Added `/createTag` (replaces the planned `_createTag` template). |

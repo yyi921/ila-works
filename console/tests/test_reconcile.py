@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 
 from console.models import ReconSession
 from core.models import Account, AuditLog, Organisation, ReconMethod, Reconciliation
@@ -16,11 +17,13 @@ from .fake_xero import fake_source
 D = Decimal
 EXTRA_ACCOUNTS = [
     {"AccountID": "a-clear", "Code": "820", "Name": "Wages Clearing", "Type": "CURRLIAB", "Status": "ACTIVE"},
+    {"AccountID": "a-prepay", "Code": "1400", "Name": "Prepayments", "Type": "CURRENT", "Status": "ACTIVE"},
+    {"AccountID": "a-accr", "Code": "2000", "Name": "Accrued Expenses", "Type": "CURRLIAB", "Status": "ACTIVE"},
     {"AccountID": "a-loan", "Code": "900", "Name": "Bank Loan", "Type": "TERMLIAB", "Status": "ACTIVE"},
     {"AccountID": "a-re", "Code": "960", "Name": "Retained Earnings", "Type": "EQUITY",
      "SystemAccount": "RETAINEDEARNINGS", "Status": "ACTIVE"},
 ]
-BALANCES = {"a-bank": "15000.00", "a-save": "0.00", "a-ar": "7300.00", "a-ap": "2200.00", "a-clear": "35.00",
+BALANCES = {"a-bank": "15000.00", "a-save": "0.00", "a-ar": "7300.00", "a-ap": "2200.00", "a-clear": "35.00", "a-prepay": "8587.50", "a-accr": "1500.00",
             "a-loan": "50000.00", "a-re": "1000.00"}
 
 
@@ -58,14 +61,14 @@ def source(monkeypatch, balances):
     return source
 
 
-def say(client, text):
-    data = client.post("/console/run/", {"command": text}).json()
+def say(client, text, files=()):
+    data = client.post("/console/run/", {"command": text, "file": list(files)}).json()
     assert data["ok"], data
     return data["result"]
 
 
-def error(client, text):
-    data = client.post("/console/run/", {"command": text}).json()
+def error(client, text, files=()):
+    data = client.post("/console/run/", {"command": text, "file": list(files)}).json()
     assert not data["ok"], data
     return data["error"]
 
@@ -132,8 +135,8 @@ def test_pack_loads_chart_and_lists_accounts(client, org):
     assert pack["900"][2] == "Schedule"
     assert "960" not in pack  # equity: not reconciled
     assert "610" in pack and "800" in pack
-    assert figures(result)["To do"] == "6"
-    assert Account.objects.filter(organisation=org[0]).count() == 14
+    assert figures(result)["To do"] == "8"
+    assert Account.objects.filter(organisation=org[0]).count() == 16
 
 
 def test_threshold_and_missing_method(client, org):
@@ -301,3 +304,142 @@ def test_ledger_balance_works_back_from_today(db):
     # September invoice and its payment don't count.
     assert result["total"] == D("400") + D("600") + D("200") - D("80")
     assert result["documents"] == 2
+
+
+# --- Schedules ------------------------------------------------------------------------------------------------------
+
+SCHEDULE = ("Account,Description,Reference,Amount,From,To,Notes\n"
+            '1400,Public liability insurance,INV-5521,"6,187.50",01/07/2026,30/06/2027,9 of 12 left\n'
+            '1400,Ticketing licence,TS-2026,"2,400.00",01/01/2026,31/12/2026,3 of 12 left\n'
+            '900,Bank loan,Loan 4471,"50,000.00",,,Per lender statement\n')
+
+
+def csv_file(text, name="schedules.csv"):
+    return SimpleUploadedFile(name, text.encode("utf-8"), content_type="text/csv")
+
+
+def test_template(client):
+    result = say(client, "/reconcile --template")
+    assert result["link"] == "/console/reconcile/template/"
+    response = client.get("/console/reconcile/template/")
+    assert response.content.decode("utf-8-sig").startswith("Account,Description,Reference,Amount,From,To,Notes")
+
+
+def test_schedules_for_several_accounts(client, org):
+    result = say(client, "/reconcile --Sep 2026 << schedules.csv", [csv_file(SCHEDULE)])
+    summary = rows(result)
+    assert summary["1400"][2:4] == ["2", "8,587.50"] and summary["1400"][6] == "0.00"
+    assert summary["900"][3] == "50,000.00"
+    r = rec(org, "1400")
+    assert r.support_balance == D("8587.50") and r.schedule[0]["reference"] == "INV-5521"
+    assert r.schedule_source["file"] == "schedules.csv" and len(r.schedule_source["sha256"]) == 64
+    assert AuditLog.objects.filter(input__contains="schedule uploaded").count() == 2
+    assert rows(say(client, "/reconcile --Sep 2026"))["1400"][7] == "Ready to sign"
+
+
+def test_schedule_for_one_account_opens_its_working_paper(client, org):
+    text = "Description,Amount,To\nInsurance,6187.50,30/06/2027\nOld licence,2400,31/08/2026\n"
+    result = say(client, "/reconcile 1400 --Sep 2026 << prepay.csv", [csv_file(text, "prepay.csv")])
+    assert result["title"] == "1400 Prepayments at 30 Sep 2026"
+    assert tables(result)[0]["title"] == "Schedule from prepay.csv"
+    assert "ended by 30 Sep 2026 still have a balance: 2 Old licence" in notes(result)
+    say(client, "prepared")
+    result = say(client, "<< prepay.csv", [csv_file("Description,Amount\nInsurance,8587.50\n", "prepay.csv")])
+    assert "sign-off was cleared" in notes(result)
+    assert rec(org, "1400").schedule == [{"description": "Insurance", "reference": "", "amount": "8587.50",
+                                         "from": "", "to": "", "notes": ""}]
+    result = say(client, "support 8587.50")
+    assert "schedule was removed" in notes(result) and rec(org, "1400").schedule == []
+
+
+def test_schedule_problems_save_nothing(client, org):
+    text = ("Account,Description,Amount,From,To\n1400,Insurance,abc,,\n610,Debtors,100,,\n"
+            "1400,,5,,\n1400,Licence,5,01/09/2026,01/08/2026\n999,Nope,5,,\n")
+    message = error(client, "/reconcile --Sep 2026 << bad.csv", [csv_file(text, "bad.csv")])
+    assert "nothing was saved" in message
+    assert "row 2:" in message and "isn't an amount" in message
+    assert "row 3: 610 Accounts Receivable is reconciled by Debtors/creditors ledger" in message
+    assert "row 4: Description is empty" in message and "row 5: To is before From" in message
+    assert "row 6: account 999" in message
+    assert not Reconciliation.objects.exists()
+
+
+def test_schedule_needs_account_column_or_account(client):
+    message = error(client, "/reconcile --Sep 2026 << s.csv", [csv_file("Description,Amount\nX,1\n", "s.csv")])
+    assert 'needs an "Account" column' in message
+    message = error(client, "/reconcile 1400 --Sep 2026 << s.csv",
+                    [csv_file("Account,Description,Amount\n900,Loan,1\n", "s.csv")])
+    assert "account 900 isn't 1400 Prepayments" in message
+
+
+def test_schedule_not_carried_forward(client, org):
+    say(client, "/reconcile 1400 --Aug 2026 << p.csv", [csv_file("Description,Amount\nInsurance,9000\n", "p.csv")])
+    result = say(client, "/reconcile 1400 --Sep 2026")
+    assert rec(org, "1400").schedule == [] and rec(org, "1400").support_balance is None
+    assert "Upload the schedule with /reconcile 1400 --Sep 2026 << schedule.csv" in notes(result)
+
+
+# --- Accruals from the Expectation Ledger ----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def accrual_journal(client, org):
+    from accounting.models import Accrual, Expectation, LedgerJournal, State
+
+    say(client, "/reconcile --Sep 2026")  # loads the chart
+    accrual = Accrual.objects.create(organisation=org[0], account_codes="2000, 2010")
+    journal = LedgerJournal.objects.create(organisation=org[0], accrual=accrual, period_end=date(2026, 9, 30),
+                                           narration="Accruals September 2026")
+    power = Account.objects.get(organisation=org[0], code="445")
+    for description, amount, state in [("Electricity September", "1000.00", State.POSTED),
+                                       ("Cleaning September", "500.00", State.CLOSED),
+                                       ("Security September", "300.00", State.PREDICTED)]:
+        Expectation.objects.create(organisation=org[0], journal=journal, description=description, account=power,
+                                   expected_amount=D(amount), state=state, basis="Run-rate")
+    return journal
+
+
+def test_accrual_account_takes_posted_lines_from_the_expectation_ledger(client, org, accrual_journal):
+    result = say(client, "/reconcile 2000 --Sep 2026")
+    assert tables(result)[0]["title"] == "Schedule from the Expectation Ledger: Accruals September 2026"
+    assert [r["cells"][1] for r in tables(result)[0]["rows"]] == ["Electricity September", "Cleaning September",
+                                                                  "Total"]
+    assert figures(result)["Supporting balance"] == "1,500.00" and figures(result)["Difference"] == "0.00"
+    assert "1 more line(s) in that journal, 300.00, aren't marked posted" in notes(result)
+    assert rec(org, "2000").schedule_source["ledger"] == accrual_journal.pk
+
+
+def test_expectation_ledger_changes_follow_until_signed(client, org, accrual_journal):
+    from accounting.models import State
+
+    say(client, "/reconcile 2000 --Sep 2026")
+    accrual_journal.lines.filter(state=State.PREDICTED).update(state=State.POSTED)
+    result = say(client, "/reconcile 2000 --Sep 2026")
+    assert figures(result)["Supporting balance"] == "1,800.00" and figures(result)["Difference"] == "(300.00)"
+    say(client, "add -300 Security accrual posted in October")
+    say(client, "prepared")
+    accrual_journal.lines.filter(description__startswith="Cleaning").delete()
+    assert rec(org, "2000").support_balance == D("1800.00")
+    say(client, "/reconcile --Sep 2026")
+    assert rec(org, "2000").support_balance == D("1800.00") and rec(org, "2000").prepared_at  # signed: frozen
+
+
+def test_upload_or_typed_support_replaces_the_expectation_ledger(client, org, accrual_journal):
+    say(client, "/reconcile 2000 --Sep 2026 << a.csv", [csv_file("Description,Amount\nAll accruals,1500\n", "a.csv")])
+    say(client, "/reconcile 2000 --Sep 2026")
+    assert rec(org, "2000").schedule_source["file"] == "a.csv"
+    say(client, "support 1400")
+    say(client, "/reconcile 2000 --Sep 2026")
+    r = rec(org, "2000")
+    assert r.support_balance == D("1400") and r.schedule == [] and r.schedule_source == {}
+
+
+def test_only_the_account_accruals_post_to_is_linked(client, org, accrual_journal):
+    say(client, "/reconcile 900 --Sep 2026")
+    assert rec(org, "900").schedule_source == {}
+    accrual_journal.accrual.account_codes = "2010, 2000"
+    accrual_journal.accrual.save()
+    result = say(client, "/reconcile 2000 --Sep 2026")
+    assert rec(org, "2000").support_balance is None
+    assert "Upload the schedule" in notes(result)
+

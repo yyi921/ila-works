@@ -18,7 +18,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/debtors` | `/ar` | Receivables ageing by customer (by days past due date). | `/debtors [--detail] [--top <n>] [>> file.xlsx]` |
 | `/creditors` | `/ap` | Payables ageing by supplier (by days past due date). | `/creditors [--detail] [--top <n>] [>> file.xlsx]` |
 | `/bills` |  | Bills due in the next 7 days (or --due <days>), with overdue bills listed first. | `/bills [--due <days>] [--overdue] [>> file.xlsx]` |
-| `/reconcile` | `/recon`, `/rec` | Month-end balance sheet reconciliation: each account's Xero balance against its support, with reconciling items and preparer/reviewer sign-off. | `/reconcile [<account>] [--<period>] \| /reconcile --bank` |
+| `/reconcile` | `/recon`, `/rec` | Month-end balance sheet reconciliation: each account's Xero balance against its support, with reconciling items, schedules and preparer/reviewer sign-off. | `/reconcile [<account>] [--<period>] [<< schedule.csv] \| /reconcile --bank \| /reconcile --template` |
 | `/compare` |  | Compare bills, invoices or a P&L measure month by month to spot unusual, new or missing amounts. | `/compare --bill\|--invoice [<number>] [--supplier\|--customer <name or code>] [--account <code or name>] [--by account] [--<period>] [--detail] [--min <amount>]   or   /compare --revenue\|--cos\|--gp\|--expenses\|--profit [--<period>]` |
 | `/inv` | `/invoice`, `/bill` | Show one invoice, bill or credit note by its number. | `/inv <number>` |
 | `/find` | `/search` | Search contacts, and invoices and bills by number or reference. | `/find <text>` |
@@ -173,14 +173,16 @@ Examples:
 
 ### /reconcile
 
-Month-end balance sheet reconciliation: each account's Xero balance against its support, with reconciling items and preparer/reviewer sign-off.
+Month-end balance sheet reconciliation: each account's Xero balance against its support, with reconciling items, schedules and preparer/reviewer sign-off.
 
-Usage: `/reconcile [<account>] [--<period>] | /reconcile --bank`
+Usage: `/reconcile [<account>] [--<period>] [<< schedule.csv] | /reconcile --bank | /reconcile --template`
 
 | Parameter | Meaning |
 | --- | --- |
 | `<account>` | Open one account's working paper by code or name, e.g. 090 |
 | `--<period>` | The month to reconcile, e.g. Sep 2026 (its last day is the period end); default last month |
+| `<< schedule.csv` | The schedule supporting the account (or, with an Account column, several accounts) |
+| `--template` | Download the schedule template and see how to fill it in |
 | `--bank` | Bank accounts: Xero transactions not yet reconciled, today |
 
 Examples:
@@ -188,12 +190,15 @@ Examples:
 - `/reconcile`
 - `/reconcile --Sep 2026`
 - `/reconcile 090 --Sep 2026`
+- `/reconcile --template`
+- `/reconcile 1400 --Sep 2026 << prepayments.csv`
+- `/reconcile --Sep 2026 << schedules.csv`
 - `/reconcile --bank`
 - `/reconcile --Sep 2026 >> reconciliations.xlsx`
 
 Also: `/recon`, `/rec`
 
-In an open working paper, type `statement <amount>` or `support <amount>`, `add [date] <amount> <description>`, `remove <n>`, `note <text>`, `prepared`, `reviewed`, `reopen`, `next` or `done`.
+In an open working paper, type `statement <amount>` or `support <amount>`, `<< schedule.csv`, `add [date] <amount> <description>`, `remove <n>`, `note <text>`, `prepared`, `reviewed`, `reopen`, `next` or `done`.
 
 ### /compare
 

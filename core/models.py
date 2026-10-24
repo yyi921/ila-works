@@ -895,6 +895,11 @@ class Reconciliation(TenantModel):
                                           help_text="The supporting balance: the bank statement's closing balance, "
                                                     "the ledger, a schedule or a third-party statement.")
     items = models.JSONField(default=list, blank=True)
+    schedule = models.JSONField(default=list, blank=True, help_text="The lines making up the supporting balance: "
+                                "[{description, reference, amount, from, to, notes}].")
+    schedule_source = models.JSONField(default=dict, blank=True,
+                                       help_text="Where the schedule came from: file name, SHA-256, rows, who, when. "
+                                                 "The file itself isn't kept.")
     notes = models.TextField(blank=True)
     prepared_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
                                     related_name="+")
