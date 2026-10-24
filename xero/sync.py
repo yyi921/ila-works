@@ -27,6 +27,7 @@ from core.models import (
     Journal,
     JournalLine,
     LineAmountType,
+    ReconMethod,
     SourceSystem,
     TrackingCategory,
     TrackingOption,
@@ -105,6 +106,78 @@ def account_class(xero_account):
     return Account.AccountClass.EQUITY
 
 
+NIL_SYSTEM_ACCOUNTS = {"HISTORICAL", "ROUNDING", "TRACKINGTRANSFERS"}
+NIL_WORDS = ("clearing", "suspense")
+INTERCOMPANY_WORDS = ("intercompany", "inter-company", "inter company")
+
+
+def proposed_method(xero_account):
+    """The reconciliation method to start a newly loaded account with; an admin can change it."""
+    kind, system = xero_account.get("Type", ""), xero_account.get("SystemAccount", "")
+    name = (xero_account.get("Name") or "").lower()
+    cls = account_class(xero_account)
+    if cls in (Account.AccountClass.REVENUE, Account.AccountClass.EXPENSE):
+        return ""
+    if kind == "BANK":
+        return ReconMethod.BANK
+    if system in ("DEBTORS", "CREDITORS"):
+        return ReconMethod.SUBLEDGER
+    if system in ("GST", "GSTONIMPORTS"):
+        return ReconMethod.GST
+    if system in NIL_SYSTEM_ACCOUNTS or any(w in name for w in NIL_WORDS):
+        return ReconMethod.NIL
+    if any(w in name for w in INTERCOMPANY_WORDS):
+        return ReconMethod.INTERCOMPANY
+    if kind == "FIXED":
+        return ReconMethod.FIXED_ASSETS
+    if cls == Account.AccountClass.EQUITY:
+        return ReconMethod.NONE
+    return ReconMethod.SCHEDULE
+
+
+@dataclass
+class AccountsResult:
+    rows: list = field(default_factory=list)
+    added: int = 0
+    updated: int = 0
+    archived: int = 0
+
+
+def refresh_accounts(organisation, source, *, fresh=False):
+    """Bring iLA's chart of accounts in line with Xero's: add new accounts, update names, codes and types, and mark
+    accounts no longer in Xero inactive. Accounts without a reconciliation method get a proposed one; settings an
+    admin has made are never changed. ``fresh`` reads Xero now rather than its copy of the last hour."""
+    existing = {a.source_id: a for a in Account.objects.filter(organisation=organisation, source_system=XERO)}
+    result = AccountsResult()
+    seen = set()
+    for a in source.raw_accounts(fresh=fresh):
+        row = existing.get(a["AccountID"]) or Account(organisation=organisation, source_system=XERO,
+                                                      source_id=a["AccountID"])
+        fields = {"code": a.get("Code", ""), "name": a.get("Name", ""), "account_class": account_class(a),
+                  "source_type": a.get("Type", ""), "is_bank_account": a.get("Type") == "BANK",
+                  "tax_code": a.get("TaxType", ""), "currency_code": a.get("CurrencyCode", ""),
+                  "system_account": a.get("SystemAccount", "") or "",
+                  "is_active": a.get("Status", "ACTIVE") == "ACTIVE"}
+        if not row.recon_method:
+            fields["recon_method"] = proposed_method(a)
+        if row.pk is None:
+            result.added += 1
+        elif any(getattr(row, k) != v for k, v in fields.items()):
+            result.updated += 1
+        if row.pk is None or any(getattr(row, k) != v for k, v in fields.items()):
+            for k, v in fields.items():
+                setattr(row, k, v)
+            row.save()
+        seen.add(a["AccountID"])
+        result.rows.append(row)
+    for source_id, row in existing.items():
+        if source_id not in seen and row.is_active:
+            row.is_active = False
+            row.save(update_fields=["is_active", "updated_at"])
+            result.archived += 1
+    return result
+
+
 class _Copier:
     def __init__(self, organisation, source):
         self.org, self.source = organisation, source
@@ -117,23 +190,8 @@ class _Copier:
     # --- Reference data ---
 
     def _accounts(self):
-        existing = {a.source_id: a for a in Account.objects.filter(organisation=self.org, source_system=XERO)}
-        by_code, by_id = {}, {}
-        for a in self.source.raw_accounts():
-            row = existing.get(a["AccountID"]) or Account(organisation=self.org, source_system=XERO,
-                                                          source_id=a["AccountID"])
-            fields = {"code": a.get("Code", ""), "name": a.get("Name", ""), "account_class": account_class(a),
-                      "source_type": a.get("Type", ""), "is_bank_account": a.get("Type") == "BANK",
-                      "tax_code": a.get("TaxType", ""), "currency_code": a.get("CurrencyCode", ""),
-                      "is_active": a.get("Status", "ACTIVE") == "ACTIVE"}
-            if row.pk is None or any(getattr(row, k) != v for k, v in fields.items()):
-                for k, v in fields.items():
-                    setattr(row, k, v)
-                row.save()
-            by_id[a["AccountID"]] = row
-            if row.code:
-                by_code[row.code.lower()] = row
-        return {"code": by_code, "id": by_id}
+        rows = refresh_accounts(self.org, self.source).rows
+        return {"code": {row.code.lower(): row for row in rows if row.code}, "id": {row.source_id: row for row in rows}}
 
     def _tracking(self):
         """{(category name, option name) in lower case: TrackingOption}, mirroring every Xero category."""

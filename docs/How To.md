@@ -4,7 +4,7 @@ A practical guide to the iLA console: what each command is for, how to type it, 
 full list of parameters with examples, see [Command reference](Command%20reference.md), or type `/help <command>` in
 the console.
 
-_Last updated: 18 October 2026 (added `/splittag`)._
+_Last updated: 24 October 2026 (added `/reconcile`, which replaces `/recon`, and the chart of accounts in admin)._
 
 ---
 
@@ -84,7 +84,11 @@ Quarters and financial years follow the year end set in Xero.
 | See only overdue bills | `/bills --overdue` |
 | Chase debtors | `/debtors --top 10`, then `/debtors --detail` |
 | Review what we owe suppliers | `/creditors --detail` |
-| Check bank reconciliation progress | `/recon` |
+| See which balance sheet accounts still need reconciling at month end | `/reconcile --Sep 2026` |
+| Reconcile the bank account to the statement | `/reconcile 090 --Sep 2026`, then `statement 12,345.67` |
+| Sign a reconciliation as prepared or reviewed | `prepared` / `reviewed` in its working paper |
+| Save the reconciliation pack for the month-end file | `/reconcile --Sep 2026 >> reconciliations.xlsx` |
+| Check how many Xero items are still unreconciled today | `/reconcile --bank` |
 | Spot unusual or missing supplier bills | `/compare --bill` |
 | Look at one supplier over 12 months | `/compare --bill Origin Energy` |
 | Watch consultancy spend | `/compare --bill --account Consulting --detail` |
@@ -158,11 +162,57 @@ Quarters and financial years follow the year end set in Xero.
 - **Syntax:** `/bills [--due <days>] [--overdue] [>> file.xlsx]`
 - **Use it:** to plan the payment run. `--due 14` looks two weeks ahead; `--overdue` shows only overdue bills.
 
-#### `/recon` (`/rec`) — bank reconciliation status
-- **Purpose:** unreconciled Xero transactions per bank account, and the oldest date.
-- **Syntax:** `/recon`
-- **Note:** Xero's dashboard counts unreconciled *statement lines*, which can be higher than iLA's figure. iLA
-  can't see statement lines yet (Xero restricts that API).
+### Month-end reconciliation
+
+#### `/reconcile` (`/recon`, `/rec`) — balance sheet reconciliation
+- **Purpose:** before the management accounts go out, check that every material balance sheet account is supported:
+  the Xero balance against a bank statement, the debtors or creditors ledger, nil, or a schedule or third-party
+  statement, with the reconciling items between them and a preparer and reviewer sign-off. **Xero isn't changed.**
+- **Syntax:** `/reconcile [<account>] [--<period>] [>> file.xlsx]` · `/reconcile --bank`
+- **Set-up (admin, once per organisation):** the chart of accounts is loaded from Xero when the organisation
+  connects. In Admin → **Chart of accounts** (filter by organisation) set each balance sheet account's
+  **reconciliation method** and **materiality threshold**; both can be edited straight in the list. iLA proposes a
+  method for each new account: bank accounts → Bank statement, Xero's debtors and creditors → Debtors/creditors
+  ledger, names with *clearing* or *suspense* → Should be nil, fixed assets → Fixed asset register, GST → GST
+  return, *intercompany* → Intercompany, equity → Not reconciled, anything else → Schedule. A threshold of 0 means
+  any balance needs a reconciliation. When accounts change in Xero, Admin → Organisations → tick the organisation
+  → **Refresh chart of accounts from Xero**. Refreshing never changes the methods and thresholds you set.
+- **The pack:** `/reconcile --Sep 2026` (default: last month) lists every balance sheet account with a balance at
+  30 Sep (bank accounts always), with its method, Xero balance, supporting balance, reconciling items, difference,
+  status and sign-off. Work to do comes first: Difference, No support, Not started, Method not set, Ready to sign,
+  then Prepared, Reviewed, Nil and Below threshold. Add `>> reconciliations.xlsx` for the file.
+- **A working paper:** `/reconcile 090 --Sep 2026` (code or name). While it's open, type plain answers:
+
+  | Type | What it does |
+  | --- | --- |
+  | `statement 12,345.67` or `support 5,000` | The supporting balance: bank statement closing balance, lender statement, schedule total |
+  | `add -250.00 Unpresented cheque 123` | A reconciling item; a date first is optional: `add 30/09/2026 1,200 Deposit in transit` |
+  | `remove 2` (or `remove 1-3`) | Remove items you added or brought forward |
+  | `note Per ANZ statement 30/09` | A note kept with the working paper (brought forward next month for schedules) |
+  | `prepared` · `reviewed` · `reopen` | Sign-off; `reopen` clears it |
+  | `next` | Move to the next account still to do |
+  | `done` (or `/cancel`) | Close the working paper; everything entered is kept |
+
+- **The rule:** the Xero balance = supporting balance + reconciling items. You can sign as prepared only when
+  the difference is nil; an unexplained difference can be added as an item so it's visible. Reviewing needs a
+  prepared working paper. Preparing and reviewing it yourself is allowed and shows as **self-reviewed**.
+- **Sign-off is cleared automatically** when anything changes afterwards, including the Xero balance (e.g. a
+  back-dated journal). Every sign-off and clearing is in the audit log.
+- **By method:**
+  - **Bank statement:** iLA lists Xero's unreconciled transactions and payments dated by the period end as items;
+    you enter the statement balance. Xero doesn't say when an item was reconciled, so an item that was outstanding
+    at month end but has been reconciled since (a deposit in transit that cleared on the 2nd) isn't listed: add it.
+  - **Debtors/creditors ledger:** the ledger at the period end comes from Xero's invoices, bills, credit notes,
+    overpayments and prepayments, worked back from today using what was paid or allocated after the period end.
+    Tested to the cent against TECC and the Demo Company at three month ends.
+  - **Should be nil:** the balance itself is the difference. A nil balance needs no sign-off.
+  - **Schedule, Fixed asset register, GST return, Intercompany:** for now, enter the supporting balance with
+    `support`. Uploading schedules and the automatic versions are coming next.
+- **Roll forward:** opening a working paper for a new month brings forward last month's items you added (and for
+  schedules, the note), marked "Brought forward"; remove the ones that have cleared.
+- **`/reconcile --bank`:** today's unreconciled Xero items per bank account and the oldest date (what `/recon` used
+  to show). Xero's dashboard counts unreconciled *statement lines*, which can be higher; iLA can't see statement
+  lines (Xero restricts that API).
 
 ### Analysis
 
@@ -365,7 +415,7 @@ Quarters and financial years follow the year end set in Xero.
 | --- | --- | --- | --- |
 | `/clean` | `/clear`, `/cls` | Clear results on screen (history kept) | `/clean` |
 | `/help` | `/?` | List all commands (including your organisation's built ones), or explain one | `/help [command]` |
-| `/cancel` | | Drop your open `/splittag` or `/tag` preview, `/createTag` or `/_createInvoice` draft; nothing is saved | `/cancel` |
+| `/cancel` | | Drop your open `/splittag` or `/tag` preview, `/createTag` or `/_createInvoice` draft, or close a `/reconcile` working paper; nothing is saved | `/cancel` |
 
 ---
 
@@ -437,12 +487,16 @@ Nothing is written to Xero; a person imports the file.
 | iLA asks for new permissions, or Xero data won't load | Type `/connect` to reconnect Xero. |
 | Results are for the wrong company | Type `/orgs`, then `/use <name>`. |
 | `/tag` proposes nothing for most rows | Narrow with `--desc` or `--contact` and use `--to`, or `set` rows yourself. Make sure the dimension's values have start and end dates. |
-| Plain text gives an error | Without an open `/tag` preview, `/createTag` or invoice draft, every command must start with `/` (or `_` for built ones). |
+| Plain text gives an error | Without an open `/tag` preview, `/createTag`, invoice draft or `/reconcile` working paper, every command must start with `/` (or `_` for built ones). |
 | `/_createInvoice` says the model isn't set up | The AI key (`ANTHROPIC_API_KEY`) is missing on the server. Ask the administrator. |
 | `/createTag` says the file needs fixing | Read the listed rows, correct the CSV and choose it again with `<<`. |
 | `/createTag` file came from Excel and looks garbled | Save it as **CSV UTF-8** (File → Save As). |
 | `/_createInvoice` says there's no invoice set-up | Add one in admin → Organisation → Invoice set-ups. |
 | Figures look a few minutes old | Xero reads are cached for 5 minutes. |
+| `/reconcile` says an account has no reconciliation method | An admin sets it in Admin → Chart of accounts. |
+| `/reconcile` lists accounts "not in iLA's chart of accounts yet" | Admin → Organisations → tick it → Refresh chart of accounts from Xero. |
+| `prepared` says there's a difference | Explain it with `add <amount> <description>` (or correct the supporting balance) until the difference is nil. |
+| A signed reconciliation is back to Difference | The Xero balance changed after sign-off (e.g. a back-dated entry). Check it, then prepare and review again. |
 
 ---
 
@@ -450,14 +504,18 @@ Nothing is written to Xero; a person imports the file.
 
 Planned, not built yet:
 
-- `/split`: reclassify amounts between GL accounts (e.g. COGS into food and beverage) as a Xero manual journal import file, using the same CSV and rules as `/splittag`.
+- **`/reconcile` next steps:** upload schedules (prepayments, accruals, deferred income, loans, payroll
+  liabilities) from a CSV; GST against Xero's GST figures; fixed assets against Xero's asset register (needs a new
+  Xero permission, so one reconnect); intercompany balances between two connected organisations; attaching
+  evidence; stamping the signed pack.
+- `/split`: reclassify amounts between GL accounts (e.g. COGS into food and beverage) as a Xero manual journal import file that you check, stamp and import, using the same CSV and rules as `/splittag`. Xero is never posted to directly.
 - Plain-English corrections in a `/tag` preview, and `skip`/`set` by contact or text, `untag`.
 - Purchase orders, and reading attached PDFs to find the event.
 - `/_createInvoice` from timesheets (day lines, hours × rate, job codes).
 - `_checkBill` and `_recFA` templates.
 - `--last N months` period syntax.
 - Plain-English input: type without `/` and iLA drafts the commands for you to approve.
-- Exact bank reconciliation, e.g. `/recon << statement.csv`.
+- Exact bank reconciliation from a statement file, e.g. `/reconcile 090 << statement.csv`.
 
 ---
 
@@ -465,6 +523,7 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 24 Oct 2026 | Added `/reconcile` (balance sheet reconciliation with working papers and sign-off); `/recon` and `/rec` now open it and the old bank status is `/reconcile --bank`. Chart of accounts in admin, with reconciliation method and materiality per account. |
 | 17 Oct 2026 | Guide created, covering all native commands, built commands and `/dim`. |
 | 17 Oct 2026 | Added `/createTag` (replaces the planned `_createTag` template). |
 | 18 Oct 2026 | **Download Excel** and **Copy table** buttons on results. `/pl --event` warns about previews not yet approved. `/splittag` with no rule shows the template. |

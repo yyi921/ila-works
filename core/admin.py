@@ -1,4 +1,4 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.forms.models import BaseInlineFormSet
 from django.urls import reverse
 from django.utils.html import format_html
@@ -16,8 +16,74 @@ class InvoiceSetupInline(admin.TabularInline):
 
 @admin.register(models.Organisation)
 class OrganisationAdmin(admin.ModelAdmin):
-    list_display = ("name", "base_currency", "timezone")
+    list_display = ("name", "base_currency", "timezone", "chart_of_accounts")
     inlines = [InvoiceSetupInline]
+    actions = ["refresh_chart_of_accounts"]
+
+    @admin.display(description="Chart of accounts")
+    def chart_of_accounts(self, obj):
+        count = models.Account.objects.filter(organisation=obj, is_active=True).count()
+        url = reverse("admin:core_account_changelist") + f"?organisation__id__exact={obj.pk}"
+        return format_html('<a href="{}">{} accounts</a>', url, count)
+
+    @admin.action(description="Refresh chart of accounts from Xero")
+    def refresh_chart_of_accounts(self, request, queryset):
+        from xero.api import XeroAPIError
+        from xero.source import source_for
+        from xero.sync import refresh_accounts
+
+        for org in queryset:
+            try:
+                result = refresh_accounts(org, source_for(org), fresh=True)
+            except XeroAPIError as exc:
+                self.message_user(request, f"{org}: {exc}", messages.ERROR)
+                continue
+            models.AuditLog.objects.create(organisation=org, user=request.user, action=models.AuditLog.Action.SYNC,
+                                           input="refresh chart of accounts",
+                                           result={"added": result.added, "updated": result.updated,
+                                                   "archived": result.archived})
+            self.message_user(request, f"{org}: {len(result.rows)} accounts from Xero; {result.added} added, "
+                                       f"{result.updated} updated, {result.archived} no longer in Xero. "
+                                       "Reconciliation settings were kept.")
+
+
+@admin.register(models.Account)
+class AccountAdmin(admin.ModelAdmin):
+    """The chart of accounts per organisation, loaded from Xero when it connects and refreshed from Organisations.
+    Admins preset how each balance sheet account is reconciled and from what balance it is material."""
+
+    list_display = ("code", "name", "account_class", "source_type", "recon_method", "recon_threshold", "is_active",
+                    "organisation")
+    list_display_links = ("code", "name")
+    list_editable = ("recon_method", "recon_threshold")
+    list_filter = ("organisation", "account_class", "recon_method", "is_active")
+    search_fields = ("code", "name")
+    ordering = ("organisation", "code")
+    list_per_page = 500
+    readonly_fields = ("organisation", "source_system", "source_id", "code", "name", "account_class", "source_type",
+                       "system_account", "is_bank_account", "tax_code", "currency_code", "is_active")
+    fieldsets = ((None, {"fields": readonly_fields}),
+                 ("Month-end reconciliation", {"fields": ("recon_method", "recon_threshold")}))
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(models.Reconciliation)
+class ReconciliationAdmin(admin.ModelAdmin):
+    list_display = ("account", "period_end", "method", "gl_balance", "support_balance", "difference", "prepared_by",
+                    "reviewed_by", "organisation")
+    list_filter = ("organisation", "period_end", "method")
+    search_fields = ("account__code", "account__name")
+    readonly_fields = ("organisation", "account", "period_end", "method", "gl_balance", "support_balance", "items",
+                       "notes", "prepared_by", "prepared_at", "reviewed_by", "reviewed_at")
+    exclude = ("source_system", "source_id", "source_updated_at", "source_hash")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 class InvoiceItemInline(admin.TabularInline):
@@ -61,7 +127,6 @@ class ImportFileAdmin(admin.ModelAdmin):
         return format_html('<a href="{}">Download</a>', reverse("console:file_download", args=[obj.pk]))
 
 for model in (
-    models.Account,
     models.Contact,
     models.TrackingCategory,
     models.TrackingOption,

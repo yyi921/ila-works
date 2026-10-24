@@ -192,8 +192,8 @@ def test_bills_due_must_be_a_number():
 # --- Recon, lookups, help ---
 
 
-def test_recon():
-    rows = rows_by_label(table(run("/recon")))
+def test_reconcile_bank():
+    rows = rows_by_label(table(run("/reconcile --bank")))
     assert rows["Business Bank"][1:] == [3, D("300.00"), date(2026, 9, 19)]
     assert rows["Savings"][1:] == [0, D("0"), None]
 

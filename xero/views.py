@@ -68,6 +68,7 @@ def callback(request):
         "scopes": token.get("scope", ""),
         "expires_at": token["expires_at"],
     }
+    connected = []
     with transaction.atomic():
         for tenant in tenants:
             name = tenant.get("tenantName") or ""
@@ -88,6 +89,7 @@ def callback(request):
                 setattr(connection, field, value)
             connection.save()
             connection.organisation.members.add(request.user)
+            connected.append(connection)
             AuditLog.objects.create(
                 organisation=connection.organisation,
                 source_system=SourceSystem.ILA,
@@ -96,8 +98,26 @@ def callback(request):
                 input="connect xero",
                 result={"tenant_id": str(connection.tenant_id), "tenant_name": name},
             )
+    for connection in connected:
+        _load_chart_of_accounts(connection)
     messages.success(request, "Xero connection updated.")
     return redirect("xero:status")
+
+
+def _load_chart_of_accounts(connection):
+    """Load the chart of accounts the first time an organisation connects; after that an admin refreshes it. A
+    failure here doesn't undo the connection: the chart then loads on first use."""
+    from core.models import Account
+
+    from .source import XeroSource
+    from .sync import refresh_accounts
+
+    if Account.objects.filter(organisation=connection.organisation).exists():
+        return
+    try:
+        refresh_accounts(connection.organisation, XeroSource(connection), fresh=True)
+    except Exception:
+        logger.warning("Couldn't load the chart of accounts for %s", connection.organisation, exc_info=True)
 
 
 def _unconnected_organisation(user, name):

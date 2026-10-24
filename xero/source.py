@@ -385,8 +385,8 @@ class XeroSource:
     def raw_manual_journals(self, start, end):
         return self._period_pages("ManualJournals", "ManualJournals", start, end)
 
-    def raw_accounts(self):
-        return self.client.get("Accounts", cache_seconds=3600).get("Accounts", [])
+    def raw_accounts(self, *, fresh=False):
+        return self.client.get("Accounts", cache_seconds=0 if fresh else 3600).get("Accounts", [])
 
     def tracking_categories(self):
         """Active tracking categories: {name: [active option names]}."""
@@ -426,32 +426,124 @@ class XeroSource:
         return bool(self.client.get("Invoices", {"InvoiceNumbers": number, "summaryOnly": "true"},
                                     cache_seconds=0).get("Invoices"))
 
+    def ledger_balance(self, ledger, as_at):
+        """Debtors (ledger "receivable") or creditors ("payable") at the end of ``as_at``, in base currency at each
+        document's rate: {"total", "documents"}. Xero only gives what is owed today, so this works back from it:
+        what's open today on documents dated by ``as_at``, plus what was paid or allocated to them after it, less
+        the credit notes, overpayments and prepayments that were open at ``as_at``."""
+        kind, credit_kind = ("ACCREC", "ACCRECCREDIT") if ledger == "receivable" else ("ACCPAY", "ACCPAYCREDIT")
+        by = f"DateTime({as_at.year},{as_at.month},{as_at.day})"
+
+        def rate(doc):
+            return to_decimal(doc.get("CurrencyRate")) or Decimal("1")
+
+        def dated_by(doc):
+            day = record_date(doc)
+            return day is not None and day <= as_at
+
+        total, count = ZERO, 0
+        for inv in self.client.get_all("Invoices", "Invoices", {
+                "where": f'Type=="{kind}" AND Status=="AUTHORISED" AND Date<={by}', "summaryOnly": "true"}):
+            total += to_decimal(inv.get("AmountDue")) / rate(inv)
+            count += 1
+        credits = [c for c in self.client.get_all("CreditNotes", "CreditNotes", {"where": f'Type=="{credit_kind}"'})
+                   if c.get("Status") in ("AUTHORISED", "PAID")]
+        pre_over = []
+        for path in ("Overpayments", "Prepayments"):
+            prefix = "RECEIVE" if ledger == "receivable" else "SPEND"
+            pre_over += [p for p in self.client.get_all(path, path)
+                         if p.get("Type", "").startswith(prefix) and p.get("Status") in ("AUTHORISED", "PAID")]
+        for credit in credits + pre_over:  # credit open at as_at: open today, plus what was used after as_at
+            if dated_by(credit):
+                total -= to_decimal(credit.get("RemainingCredit")) / rate(credit)
+                count += 1
+        after = [p for p in self.client.get_all("Payments", "Payments", {"where": f"Date>{by}"})
+                 if p.get("Status") != "DELETED"]
+        invoice_ids = {(p.get("Invoice") or {}).get("InvoiceID") for p in after}
+        for credit in credits + pre_over:
+            for alloc in credit.get("Allocations") or []:
+                invoice_ids.add((alloc.get("Invoice") or {}).get("InvoiceID"))
+        invoices = self._invoices_by_id(invoice_ids - {None})
+        credit_by_id = {c.get("CreditNoteID") or c.get("OverpaymentID") or c.get("PrepaymentID"): c
+                        for c in credits + pre_over}
+        for pay in after:
+            invoice = invoices.get((pay.get("Invoice") or {}).get("InvoiceID"))
+            if invoice is not None and invoice.get("Type") == kind and dated_by(invoice):
+                total += to_decimal(pay.get("Amount")) / rate(invoice)
+            for key, id_field in (("CreditNote", "CreditNoteID"), ("Overpayment", "OverpaymentID"),
+                                  ("Prepayment", "PrepaymentID")):
+                credit = credit_by_id.get((pay.get(key) or {}).get(id_field))
+                if credit is not None and dated_by(credit):  # a refund after as_at: the credit was still open
+                    total -= to_decimal(pay.get("Amount")) / rate(credit)
+        for credit in credits + pre_over:
+            for alloc in credit.get("Allocations") or []:
+                invoice = invoices.get((alloc.get("Invoice") or {}).get("InvoiceID"))
+                # Xero's ledger takes an allocation on the latest of its own date and the two documents' dates
+                # (an allocation can be dated before the credit note it uses).
+                days = [d for d in (record_date(alloc), record_date(credit),
+                                    record_date(invoice) if invoice else None) if d]
+                if not days or max(days) <= as_at:
+                    continue
+                amount = to_decimal(alloc.get("Amount"))
+                if invoice is not None and dated_by(invoice):
+                    total += amount / rate(invoice)
+                if dated_by(credit):
+                    total -= amount / rate(credit)
+        return {"total": total.quantize(Decimal("0.01")), "documents": count}
+
+    def _invoices_by_id(self, ids):
+        found = {}
+        ids = sorted(ids)
+        for start in range(0, len(ids), 40):
+            batch = self.client.get("Invoices", {"IDs": ",".join(ids[start:start + 40]), "summaryOnly": "true"})
+            found.update({inv["InvoiceID"]: inv for inv in batch.get("Invoices", [])})
+        return found
+
     # --- Bank reconciliation ---
 
-    def unreconciled(self):
-        """Per bank account: count, net amount and oldest date of authorised transactions and payments not yet
-        reconciled. Bank statement lines that haven't been matched or coded at all aren't visible through Xero's
-        standard API, so this can understate what is left to reconcile."""
+    def unreconciled_items(self, as_at=None):
+        """Authorised bank transactions and payments not yet reconciled, dated on or before ``as_at`` if given: dicts
+        (account_id, date, description, amount), amounts signed as they move the bank balance (receipts positive).
+        Bank statement lines that haven't been matched or coded at all aren't visible through Xero's standard API,
+        and Xero doesn't say when an item was reconciled, so an item dated before ``as_at`` but reconciled since
+        doesn't appear."""
         accounts = self.accounts()
-        summary = {}
+        items = []
 
-        def add(account_id, day, amount):
+        def add(account_id, day, description, amount):
             if not account_id or not accounts.get(account_id, {}).get("is_bank"):
                 return
-            s = summary.setdefault(account_id, {"account": accounts[account_id]["name"], "count": 0,
-                                                "amount": ZERO, "oldest": None})
-            s["count"] += 1
-            s["amount"] += amount
-            if day and (s["oldest"] is None or day < s["oldest"]):
-                s["oldest"] = day
+            if as_at and day and day > as_at:
+                return
+            items.append({"account_id": account_id, "date": day, "description": description, "amount": amount})
 
         where = 'IsReconciled==false AND Status=="AUTHORISED"'
         for txn in self.client.get_all("BankTransactions", "BankTransactions", {"where": where}):
             sign = -1 if txn.get("Type", "").startswith("SPEND") else 1
-            add((txn.get("BankAccount") or {}).get("AccountID"), record_date(txn), sign * to_decimal(txn.get("Total")))
+            text = " · ".join(p for p in ((txn.get("Contact") or {}).get("Name", ""), txn.get("Reference", "")) if p)
+            add((txn.get("BankAccount") or {}).get("AccountID"), record_date(txn),
+                text or ("Spend money" if sign < 0 else "Receive money"), sign * to_decimal(txn.get("Total")))
         for pay in self.client.get_all("Payments", "Payments", {"where": where}):
             sign = -1 if pay.get("PaymentType", "").startswith("ACCPAY") or pay.get("PaymentType") == "ARCREDITPAYMENT" else 1
-            add((pay.get("Account") or {}).get("AccountID"), record_date(pay), sign * to_decimal(pay.get("Amount")))
+            invoice = pay.get("Invoice") or {}
+            text = " · ".join(p for p in ((invoice.get("Contact") or {}).get("Name", ""), invoice.get("InvoiceNumber", ""),
+                                          pay.get("Reference", "")) if p)
+            add((pay.get("Account") or {}).get("AccountID"), record_date(pay), text or "Payment",
+                sign * to_decimal(pay.get("Amount")))
+        return items
+
+    def unreconciled(self):
+        """Per bank account: count, net amount and oldest date of authorised transactions and payments not yet
+        reconciled (see ``unreconciled_items``), so this can understate what is left to reconcile."""
+        accounts = self.accounts()
+        summary = {}
+        for item in self.unreconciled_items():
+            s = summary.setdefault(item["account_id"], {"account": accounts[item["account_id"]]["name"], "count": 0,
+                                                        "amount": ZERO, "oldest": None})
+            s["count"] += 1
+            s["amount"] += item["amount"]
+            if item["date"] and (s["oldest"] is None or item["date"] < s["oldest"]):
+                s["oldest"] = item["date"]
         for account_id, acc in accounts.items():
             if acc["is_bank"] and acc["status"] != "ARCHIVED":
                 summary.setdefault(account_id, {"account": acc["name"], "count": 0, "amount": ZERO, "oldest": None})
