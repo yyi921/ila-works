@@ -4,10 +4,10 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html, format_html_join, linebreaks
 
+from . import jobs
 from .ledger import LedgerError, build_import_file, check_bills, mark_posted, run_accruals
 from .models import (BEHAVIOUR_GUIDE, Accrual, AccrualProfile, Behaviour, Cogs, Expectation, LedgerJournal,
                      Prepayment, State)
-from .scan import copy_history, default_window, scan
 from .util import month_end, month_start
 
 SOURCE_FIELDS = ("source_system", "source_id", "source_updated_at", "source_hash")
@@ -122,11 +122,11 @@ class AccrualAdmin(SameOrganisation, admin.ModelAdmin):
     the five sections below, each profile with a memo of what iLA found and the rule it would follow. Running
     saves a journal in the Expectation Ledger."""
 
-    list_display = ("organisation", "account_codes", "history_months", "materiality", "last_scanned_at",
-                    "profile_counts", "journals_link")
+    list_display = ("organisation", "account_codes", "history_months", "materiality", "last_job",
+                    "last_scanned_at", "profile_counts", "journals_link")
     list_filter = ("organisation",)
     actions = ["scan_history", "copy_and_scan", "run_last_month"]
-    readonly_fields = ("last_scanned_at", "scanned_from", "scanned_to", "summary")
+    readonly_fields = ("last_job", "last_scanned_at", "scanned_from", "scanned_to", "summary")
     filter_horizontal = ("driver_categories",)
     fieldsets = (
         (None, {"fields": ("organisation", "account_codes", "history_months", "materiality", "driver_categories")}),
@@ -137,7 +137,7 @@ class AccrualAdmin(SameOrganisation, admin.ModelAdmin):
                            "fields you have changed on a profile."}),
         ("Journals", {"fields": ("journal_tax_rate", "date_format")}),
         ("Deleted profiles", {"fields": ("excluded_keys",), "classes": ("collapse",)}),
-        ("Last scan", {"fields": ("last_scanned_at", "scanned_from", "scanned_to", "summary"),
+        ("Last scan", {"fields": ("last_job", "last_scanned_at", "scanned_from", "scanned_to", "summary"),
                        "description": "Scan or run from the Accruals list: tick the organisation and choose an "
                                       "action. Fields you change on a profile (marked ✎), its notes and Active are "
                                       "kept when it is scanned again; a profile you delete is not brought back."}),
@@ -179,22 +179,28 @@ class AccrualAdmin(SameOrganisation, admin.ModelAdmin):
         rows += [(f"— {label}", n) for label, n in s.get("by_behaviour", {}).items()]
         return format_html("<table>{}</table>", format_html_join("", "<tr><td>{}</td><td>{}</td></tr>", rows))
 
-    def _scan(self, request, queryset, *, copy):
-        for accrual in queryset:
-            start, end = default_window(accrual.history_months)
-            try:
-                if copy:
-                    from xero.source import source_for
+    @admin.display(description="Last job")
+    def last_job(self, obj):
+        if not obj.job_status:
+            return "–"
+        when = obj.job_finished_at or obj.job_started_at
+        stamp = f"{timezone.localtime(when):%d %b %H:%M}" if when else ""
+        if obj.job_status == jobs.RUNNING:
+            if obj.job_started_at and timezone.now() - obj.job_started_at > jobs.STALE_AFTER:
+                return f"Stopped without finishing (started {stamp}); start it again. {obj.job_message}"
+            return f"Running since {stamp}: {obj.job_message} Refresh the page to follow it."
+        return f"{obj.get_job_status_display()} {stamp}: {obj.job_message}"
 
-                    copied = copy_history(accrual, source_for(accrual.organisation), start, end)
-                    self.message_user(request, f"{accrual.organisation}: {copied.total} transactions read from Xero "
-                                               f"({copied.added} new, {copied.updated} changed).")
-                result = scan(accrual, start, end)
-            except Exception as exc:  # shown to the admin rather than a server error
-                self.message_user(request, f"{accrual.organisation}: {exc}", messages.ERROR)
-                continue
-            self.message_user(request, f"{accrual.organisation}: {len(result.profiles)} profiles learned from "
-                                       f"{start:%b %Y} to {end:%b %Y}.")
+    def _scan(self, request, queryset, *, copy):
+        # In the background: copying from Xero takes minutes and the web server stops a request after 30 seconds.
+        for accrual in queryset:
+            if jobs.copy_and_scan(accrual, copy=copy, user=request.user):
+                self.message_user(request, f"{accrual.organisation}: started "
+                                           + ("copying from Xero, then scanning" if copy else "scanning")
+                                           + ". It takes a few minutes; refresh this page and see Last job.")
+            else:
+                self.message_user(request, f"{accrual.organisation}: a job is already running; see Last job.",
+                                  messages.WARNING)
 
     @admin.action(description="Scan accrual history (transactions already in iLA)")
     def scan_history(self, request, queryset):
