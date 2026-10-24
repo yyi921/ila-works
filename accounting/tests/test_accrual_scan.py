@@ -146,7 +146,8 @@ def test_admin_shows_accounting_sections(ledger, admin_client):
 
     response = admin_client.post(reverse("admin:accounting_accrual_changelist"),
                                  {"action": "scan_history", "_selected_action": [ledger.accrual.pk]}, follow=True)
-    assert "profiles learned" in response.content.decode()
+    page = response.content.decode()
+    assert "started scanning" in page and "profiles learned" in page  # the job ran straight away in tests
 
     page = admin_client.get(reverse("admin:accounting_accrual_change", args=[ledger.accrual.pk])).content.decode()
     for heading in ("Fixed recurring", "Variable recurring", "Driver-linked", "Periodic, non-monthly", "One-off",

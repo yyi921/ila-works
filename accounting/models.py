@@ -115,6 +115,13 @@ class Accrual(TenantModel):
         max_length=50, default="BAS Excluded", help_text="Tax rate name on accrual journal lines in the import file.")
     date_format = models.CharField(max_length=20, default="%d/%m/%Y", help_text="Date format in the import file.")
 
+    # The background job started from admin (copy from Xero and/or scan); see accounting/jobs.py.
+    job_status = models.CharField("last job", max_length=20, blank=True,
+                                  choices=[("running", "Running"), ("done", "Done"), ("failed", "Failed")])
+    job_message = models.TextField(blank=True)
+    job_started_at = models.DateTimeField(null=True, blank=True)
+    job_finished_at = models.DateTimeField(null=True, blank=True)
+
     last_scanned_at = models.DateTimeField(null=True, blank=True)
     scanned_from = models.DateField(null=True, blank=True)
     scanned_to = models.DateField(null=True, blank=True)

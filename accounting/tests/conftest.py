@@ -107,3 +107,9 @@ def ledger(db):
 
 def by_account(result):
     return {p.account.code: p for p in result.profiles}
+
+
+@pytest.fixture(autouse=True)
+def jobs_run_straight_away(monkeypatch):
+    """Admin jobs run in a background thread in production; in tests they run before the action returns."""
+    monkeypatch.setattr("accounting.jobs.start", lambda work: work())
