@@ -62,6 +62,8 @@ Builds a profile per **supplier × account × location/department** from 24+ mon
 
 The key feature is **billing lag**: days from the end of the service period to the bill date. It tells iLA whether a missing bill at close is normal ("always arrives on the 12th") or suspicious ("this supplier is always on time").
 
+**Built (24 Oct 2026): history scan.** Admin → Accounting → Accruals holds each organisation's set-up (accrual account, e.g. TECC 2000; months of history; materiality; driver tracking categories). The action *Copy history from Xero, then scan* (or `manage.py scan_accruals TECC --copy`) reads every journal on the accrual account, takes the cost lines as what was accrued, groups them by supplier or description × cost account × location tracking (event tracking is the driver, not part of the key), and sorts each profile into the five sections above. Each profile gets a memo (months accrued, amounts, seasonality, the bill that followed and its lag, how close the accrual was, whether it was reversed) and a rule (as text and data). Reviewer changes to behaviour, notes and Active survive a re-scan. Code: `accounting/scan.py`.
+
 ### Engine 2: cut-off scanner
 
 For the September close, scan everything arriving from 1 October to the close date.

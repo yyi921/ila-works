@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     "core",
     "xero",
     "console",
+    "accounting",
 ]
 
 MIDDLEWARE = [
