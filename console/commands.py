@@ -843,17 +843,20 @@ def _compare_measures(ctx, params, measures):
 
 
 @command(
-    "reconcile",
+    "reconcile", takes_input=True,
     summary="Month-end balance sheet reconciliation: each account's Xero balance against its support, with "
-            "reconciling items and preparer/reviewer sign-off.",
-    usage="/reconcile [<account>] [--<period>] | /reconcile --bank",
+            "reconciling items, schedules and preparer/reviewer sign-off.",
+    usage="/reconcile [<account>] [--<period>] [<< schedule.csv] | /reconcile --bank | /reconcile --template",
     params=[
         ("<account>", "Open one account's working paper by code or name, e.g. 090"),
         ("--<period>", "The month to reconcile, e.g. Sep 2026 (its last day is the period end); default last month"),
+        ("<< schedule.csv", "The schedule supporting the account (or, with an Account column, several accounts)"),
+        ("--template", "Download the schedule template and see how to fill it in"),
         ("--bank", "Bank accounts: Xero transactions not yet reconciled, today"),
     ],
-    examples=["/reconcile", "/reconcile --Sep 2026", "/reconcile 090 --Sep 2026", "/reconcile --bank",
-              "/reconcile --Sep 2026 >> reconciliations.xlsx"],
+    examples=["/reconcile", "/reconcile --Sep 2026", "/reconcile 090 --Sep 2026", "/reconcile --template",
+              "/reconcile 1400 --Sep 2026 << prepayments.csv", "/reconcile --Sep 2026 << schedules.csv",
+              "/reconcile --bank", "/reconcile --Sep 2026 >> reconciliations.xlsx"],
     aliases=("recon", "rec"),
 )
 def reconcile(ctx, cmd):

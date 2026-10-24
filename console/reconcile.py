@@ -4,6 +4,9 @@
                                      balance, supporting balance, reconciling items, difference and sign-off
 ``/reconcile 090 [--Sep 2026]``      open one account's working paper (by code or name)
 ``/reconcile --bank``                bank accounts: Xero transactions not yet reconciled (what /recon used to show)
+``/reconcile 1400 --Sep 2026 << schedule.csv``   the schedule supporting one account (prepayments, accruals, loans...)
+``/reconcile --Sep 2026 << schedules.csv``       schedules for several accounts at once (an Account column)
+``/reconcile --template``            the schedule template and how to fill it in
 
 How each account is reconciled, and from what balance it is material, is preset per account by an admin in the
 chart of accounts. The Xero balance should equal the supporting balance (a bank statement's closing balance, the
@@ -11,13 +14,25 @@ debtors or creditors ledger, nil, or a figure from a schedule or a third-party s
 A working paper is signed as prepared once the difference is nil, then reviewed; any change after that, including a
 change in the Xero balance, clears the sign-off. Reconciling items roll forward to the next period. Nothing changes
 in Xero.
+
+A schedule is the list of lines making up a supporting balance. It is read from the uploaded CSV, checked and kept
+on the working paper (with the file's name and SHA-256); the file itself isn't stored. A schedule is for one month:
+next month needs the next schedule.
+
+The account accrual runs post to (the first account in the organisation's accrual set-up, e.g. TECC 2000) takes its
+schedule from the Expectation Ledger: that month's accrual lines marked posted (or since closed), unless a person
+uploads a schedule or types a supporting balance instead.
 """
 
+import csv
+import hashlib
+import io
 import re
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
+from django.urls import reverse
 from django.utils import timezone
 
 from core.models import Account, AuditLog, ReconMethod, Reconciliation
@@ -42,8 +57,28 @@ ORDER = [DIFFERENCE, NO_SUPPORT, NOT_STARTED, NOT_SET, READY, PREPARED, REVIEWED
 DONE = {REVIEWED, NIL_OK, BELOW}
 BANK_NOTE = ("Xero doesn't say when an item was reconciled, so an item dated before the period end but reconciled "
              "since (e.g. a deposit in transit that cleared on the 2nd) isn't listed: add it with add.")
-HELP = ("Type: statement 12,345.67 (bank) or support 5,000 · add -250.00 Unpresented cheque 123 · add 30/09/2026 "
-        "1,200 Deposit in transit · remove 2 · note <text> · prepared · reviewed · reopen · next · done.")
+HELP = ("Type: statement 12,345.67 (bank) or support 5,000 · << schedule.csv · add -250.00 Unpresented cheque 123 · "
+        "add 30/09/2026 1,200 Deposit in transit · remove 2 · note <text> · prepared · reviewed · reopen · next · done.")
+# Methods whose supporting balance a person gives: typed, or as a schedule.
+SCHEDULE_METHODS = {ReconMethod.SCHEDULE, ReconMethod.FIXED_ASSETS, ReconMethod.GST, ReconMethod.INTERCOMPANY}
+MAX_FILE_BYTES = 2 * 1024 * 1024
+TEMPLATE_ROWS = [
+    ["Account", "Description", "Reference", "Amount", "From", "To", "Notes"],
+    ["1400", "Public liability insurance", "INV-5521", "6,187.50", "01/07/2026", "30/06/2027", "9 of 12 months left"],
+    ["1400", "Ticketing software licence", "TS-2026", "2,400.00", "01/01/2026", "31/12/2026", "3 of 12 months left"],
+    ["2100", "Audit fee FY2027", "", "4,500.00", "", "", "Quote from auditors, 3 of 12 months"],
+    ["2100", "Electricity September", "", "18,000.00", "01/09/2026", "30/09/2026", "Bill due mid October"],
+    ["2300", "Bank loan", "Loan 4471", "50,000.00", "", "", "Per lender statement 30/09/2026"],
+]
+GUIDE_ROWS = (
+    ("Account", "The account code, e.g. 1400. Can be left out when the command names the account."),
+    ("Description", "What the line is, e.g. Public liability insurance."),
+    ("Reference", "Optional: invoice, contract or loan number."),
+    ("Amount", "The line's balance at the period end, signed as the account shows it in Xero's balance sheet."),
+    ("From, To", "Optional: the period the line covers (30/06/2027). A line whose To date is on or before the "
+                 "period end is flagged: a prepayment that has run out should be nil."),
+    ("Notes", "Optional: how it was worked out, e.g. 9 of 12 months left."),
+)
 
 
 # --- Dialogue plumbing (see dialogues.py) ------------------------------------------------------------------------
@@ -79,11 +114,20 @@ def answer(ctx, session, text, files=()):
     intro = _refresh(ctx, rec, balance)
     word, _, rest = low.partition(" ")
     raw_rest = (text or "").strip()[len(word):].strip()
-    if word in ("statement", "support", "balance"):
+    if files:
+        if len(files) > 1:
+            raise CommandError("Choose one schedule file.")
+        lines = _read_schedule(ctx, files[0], [rec.account])
+        intro = _apply_schedule(ctx, rec, lines[rec.account.pk], files[0])
+    elif word in ("statement", "support", "balance"):
         if rec.method in AUTO_SUPPORT:
             raise CommandError(f"The supporting balance for {rec.get_method_display().lower()} comes from Xero.")
         rec.support_balance = _money(rest)
-        intro = _changed(ctx, rec, f"Supporting balance set to {rec.support_balance:,.2f}.")
+        message = f"Supporting balance set to {rec.support_balance:,.2f}."
+        if rec.schedule:
+            rec.schedule, rec.schedule_source = [], {}
+            message += " The schedule was removed; the typed balance replaces it."
+        intro = _changed(ctx, rec, message)
     elif word == "add":
         rec.items = rec.items + [_item(raw_rest)]
         intro = _changed(ctx, rec, "Reconciling item added.")
@@ -120,18 +164,24 @@ def start(ctx, cmd):
     org = ctx.organisation
     if org is None:
         raise CommandError("No organisation selected. Use /orgs to list them and /use <name> to pick one.")
-    params = read_params(cmd, ctx, flags={"bank"}, period=True)
+    params = read_params(cmd, ctx, flags={"bank", "template"}, period=True)
+    if "template" in params.flags:
+        return guide(params.period)
     if "bank" in params.flags:
-        if cmd.text or params.period:
+        if cmd.text or params.period or cmd.input_file:
             raise CommandError("/reconcile --bank shows today's unreconciled Xero items; it takes nothing else.")
         return bank_status(ctx)
     period_end = _period_end(ctx, params.period)
     accounts = _chart(ctx)
     balances = _balances(ctx, period_end)
+    account = None
     if cmd.text:
         account = _find_account(accounts, cmd.text)
         if not account.is_balance_sheet:
             raise CommandError(f"{account} is a profit and loss account; /reconcile is for balance sheet accounts.")
+    if cmd.input_file:
+        return upload_schedules(ctx, ctx.input_file, accounts, balances, period_end, account)
+    if account is not None:
         return open_working_paper(ctx, account, period_end, balances.get(account.source_id, ZERO))
     return pack(ctx, accounts, balances, period_end)
 
@@ -276,34 +326,44 @@ def _who(user, when):
 
 # --- The working paper -----------------------------------------------------------------------------------------
 
-def open_working_paper(ctx, account, period_end, balance):
-    method = account.recon_method
-    if not method:
+def _check_method(account):
+    if not account.recon_method:
         raise CommandError(f"{account} has no reconciliation method yet. An admin sets it in Admin > Chart of "
                            "accounts.")
-    if method == ReconMethod.NONE:
+    if account.recon_method == ReconMethod.NONE:
         raise CommandError(f"{account} is set to Not reconciled in the chart of accounts.")
+
+
+def _working_paper(ctx, account, period_end, balance):
+    """(reconciliation, message): the account's working paper for the period, made (with last period's items
+    brought forward) if there isn't one, and up to date with Xero."""
+    _check_method(account)
+    method = account.recon_method
+    intro = ""
+    rec = Reconciliation.objects.filter(organisation=ctx.organisation, account=account, period_end=period_end).first()
+    if rec is None:
+        rec = Reconciliation(organisation=ctx.organisation, account=account, period_end=period_end,
+                             method=method, gl_balance=balance)
+        carried = _carry_forward(rec)
+        rec.save()
+        if carried:
+            intro = (f"{carried} reconciling item(s) brought forward from the last reconciliation: remove any "
+                     "that have cleared.")
+    elif rec.method != method:
+        rec.method = method
+        rec.clear_signoff()
+        rec.save()
+        intro = "The method changed in the chart of accounts, so the sign-off was cleared."
+    refreshed = _refresh(ctx, rec, balance)
+    return rec, " ".join(p for p in (intro, refreshed) if p)
+
+
+def open_working_paper(ctx, account, period_end, balance, *, intro=""):
     with transaction.atomic():
-        rec = Reconciliation.objects.filter(organisation=ctx.organisation, account=account,
-                                            period_end=period_end).first()
-        intro = ""
-        if rec is None:
-            rec = Reconciliation(organisation=ctx.organisation, account=account, period_end=period_end,
-                                 method=method, gl_balance=balance)
-            carried = _carry_forward(rec)
-            rec.save()
-            if carried:
-                intro = (f"{carried} reconciling item(s) brought forward from the last reconciliation: remove any "
-                         "that have cleared.")
-        elif rec.method != method:
-            rec.method = method
-            rec.clear_signoff()
-            rec.save()
-            intro = "The method changed in the chart of accounts, so the sign-off was cleared."
+        rec, message = _working_paper(ctx, account, period_end, balance)
         _close(ctx)
         ReconSession.objects.create(organisation=ctx.organisation, user=ctx.user, reconciliation=rec)
-    refreshed = _refresh(ctx, rec, balance)
-    return show(ctx, rec, balance, intro=" ".join(p for p in (intro, refreshed) if p))
+    return show(ctx, rec, balance, intro=" ".join(p for p in (intro, message) if p))
 
 
 def _carry_forward(rec):
@@ -324,15 +384,21 @@ def _refresh(ctx, rec, balance):
     balance and Xero's items. A change to a signed working paper clears the sign-off. Returns a message or ""."""
     messages = []
     signed = bool(rec.prepared_at)
-    before = (rec.gl_balance, rec.support_balance, [i for i in rec.items if i["source"] == "xero"])
+    before = (rec.gl_balance, rec.support_balance, [i for i in rec.items if i["source"] == "xero"], rec.schedule)
     rec.gl_balance = balance
     if rec.method == ReconMethod.NIL:
         rec.support_balance = ZERO
     elif rec.method == ReconMethod.SUBLEDGER and not signed:
         rec.support_balance = _ledger(ctx, rec)
+    elif rec.method in SCHEDULE_METHODS and not signed and (rec.support_balance is None
+                                                            or rec.schedule_source.get("ledger")):
+        accruals = expectation_ledger_schedule(rec)
+        if accruals is not None:
+            rec.schedule, rec.schedule_source = accruals
+            rec.support_balance = sum((Decimal(line["amount"]) for line in rec.schedule), ZERO)
     if rec.method == ReconMethod.BANK and not signed:
         rec.items = _xero_items(ctx, rec) + [i for i in rec.items if i["source"] != "xero"]  # numbers stay put
-    after = (rec.gl_balance, rec.support_balance, [i for i in rec.items if i["source"] == "xero"])
+    after = (rec.gl_balance, rec.support_balance, [i for i in rec.items if i["source"] == "xero"], rec.schedule)
     if after == before:
         return ""
     if signed and before[0] != rec.gl_balance:
@@ -353,6 +419,33 @@ def _ledger(ctx, rec):
         return ctx.source.ledger_balance(kind, rec.period_end)["total"]
     except XeroAPIError:
         return None
+
+
+def expectation_ledger_schedule(rec):
+    """(schedule lines, source) from the Expectation Ledger's accrual journal for the period, if ``rec``'s account is
+    the one accrual runs post to; None otherwise or when there's no journal for the period yet. Only lines marked
+    posted (or since closed) are in Xero at the period end; the rest are counted in the source as not posted."""
+    from accounting.models import Accrual, LedgerJournal, State
+
+    accrual = Accrual.objects.filter(organisation=rec.organisation).first()
+    if accrual is None or not accrual.codes or accrual.codes[0] != rec.account.code:
+        return None
+    journal = LedgerJournal.objects.filter(accrual=accrual, kind=LedgerJournal.Kind.ACCRUAL,
+                                           period_end=rec.period_end).first()
+    if journal is None:
+        return None
+    lines, unposted, unposted_total = [], 0, ZERO
+    for line in journal.lines.select_related("supplier").order_by("pk"):
+        if line.state not in (State.POSTED, State.CLOSED):
+            unposted += 1
+            unposted_total += line.expected_amount
+            continue
+        lines.append({"description": line.description[:200],
+                      "reference": line.supplier.name[:100] if line.supplier_id else "",
+                      "amount": str(line.expected_amount), "from": "", "to": "",
+                      "notes": f"{line.get_state_display()} · {line.basis}"[:300]})
+    return lines, {"ledger": journal.pk, "journal": str(journal), "rows": len(lines), "unposted": unposted,
+                   "unposted_total": str(unposted_total)}
 
 
 def _xero_items(ctx, rec):
@@ -448,6 +541,12 @@ def show(ctx, rec, balance, *, intro=""):
             table.add(n, date.fromisoformat(item["date"]) if item.get("date") else None, item["description"], source,
                       Decimal(item["amount"]))
         table.add(None, None, "Total", "", rec.items_total, total=True)
+    if rec.schedule or rec.schedule_source.get("ledger"):
+        _schedule_table(result, rec)
+    elif rec.method in SCHEDULE_METHODS and rec.support_balance is None:
+        result.add(Note(f"Upload the schedule with /reconcile {account.code} --{_label(rec.period_end)} << "
+                        "schedule.csv (or type << schedule.csv here), or type support <amount>. /reconcile --template "
+                        "has the template.", "warning"))
     if rec.notes:
         result.add(Note(f"Note: {rec.notes}"))
     if rec.method == ReconMethod.BANK:
@@ -462,6 +561,175 @@ def show(ctx, rec, balance, *, intro=""):
         result.add(Note(f"Prepared by {_who(rec.prepared_by, rec.prepared_at)}; awaiting review (type reviewed)."))
     result.add(Note(HELP, "warning"))
     return result
+
+
+# --- Schedules --------------------------------------------------------------------------------------------------
+
+def guide(period):
+    when = period.label if period else "Sep 2026"
+    result = Result("Reconciliation schedules", subtitle="The lines making up an account's supporting balance")
+    result.link, result.link_text = reverse("console:reconcile_template"), "Download the template (schedule-template.csv)"
+    table = result.add(Table([Column("Column"), Column("What goes in it")], title="Filling in the template"))
+    for row in GUIDE_ROWS:
+        table.add(*row)
+    result.add(Note("One file can hold several accounts' schedules (one or more rows each). Accounts must use the "
+                    "Schedule, Fixed asset register, GST return or Intercompany method in the chart of accounts."))
+    result.add(Note(f"Next: /reconcile --{when} << schedules.csv for several accounts, or /reconcile 1400 --{when} << "
+                    "prepayments.csv for one. Each account's working paper then shows its schedule; anything signed "
+                    "is reopened.", "warning"))
+    return result
+
+
+def template_csv():
+    out = io.StringIO()
+    csv.writer(out).writerows(TEMPLATE_ROWS)
+    return "\ufeff" + out.getvalue()
+
+
+def _read_schedule(ctx, upload, accounts):
+    """{account pk: [line, ...]} from a schedule CSV, every problem reported together. ``accounts`` are the ones the
+    file may name; with one account given in the command the Account column may be left out or empty."""
+    if not upload.name.lower().endswith(".csv"):
+        raise CommandError(f"{upload.name} isn't a CSV file. Save it as CSV (in Excel: File → Save As → CSV UTF-8).")
+    if upload.size > MAX_FILE_BYTES:
+        raise CommandError(f"{upload.name} is over 2 MB.")
+    raw = upload.read()
+    upload.seek(0)
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252", errors="replace")
+    rows = [row for row in csv.reader(io.StringIO(text)) if any(c.strip() for c in row)]
+    if len(rows) < 2:
+        raise CommandError(f"{upload.name} needs a heading row and at least one line.")
+    index = {h.strip().lower(): i for i, h in enumerate(rows[0]) if h.strip()}
+    for required in ("description", "amount"):
+        if required not in index:
+            raise CommandError(f'{upload.name} needs a "{required.title()}" column. /reconcile --template has the '
+                               "template.")
+    only = accounts[0] if len(accounts) == 1 else None
+    if "account" not in index and only is None:
+        raise CommandError(f'{upload.name} needs an "Account" column, or name the account in the command: '
+                           "/reconcile 1400 --Sep 2026 << schedule.csv.")
+
+    def cell(row, name):
+        i = index.get(name)
+        return row[i].strip() if i is not None and i < len(row) else ""
+
+    by_code = {a.code.lower(): a for a in accounts if a.code}
+    lines, problems = {}, []
+    for n, row in enumerate(rows[1:], 2):
+        try:
+            code = cell(row, "account")
+            if code:
+                account = by_code.get(code.lower())
+                if account is None:
+                    raise CommandError(f"account {code} " + (f"isn't {only}." if only else
+                                                             "isn't a balance sheet account in the chart."))
+            elif only is not None:
+                account = only
+            else:
+                raise CommandError("Account is empty.")
+            if account.recon_method not in SCHEDULE_METHODS:
+                raise CommandError(f"{account} is reconciled by {account.get_recon_method_display() or 'no method'}, "
+                                   "not a schedule (change it in Admin > Chart of accounts).")
+            description = cell(row, "description")
+            if not description:
+                raise CommandError("Description is empty.")
+            amount = _money(cell(row, "amount"))
+            start_text, end_text = cell(row, "from"), cell(row, "to")
+            start_, end_ = parse_date(start_text) if start_text else None, parse_date(end_text) if end_text else None
+            if (start_text and not start_) or (end_text and not end_):
+                raise CommandError("From and To must be dates, e.g. 30/06/2027.")
+            if start_ and end_ and end_ < start_:
+                raise CommandError("To is before From.")
+            lines.setdefault(account.pk, []).append({
+                "description": description[:200], "reference": cell(row, "reference")[:100], "amount": str(amount),
+                "from": start_.isoformat() if start_ else "", "to": end_.isoformat() if end_ else "",
+                "notes": cell(row, "notes")[:300]})
+        except CommandError as exc:
+            problems.append(f"row {n}: {exc}")
+    if problems:
+        raise CommandError(f"{upload.name} needs fixing; nothing was saved. " + " ".join(problems[:12])
+                           + (f" (and {len(problems) - 12} more)" if len(problems) > 12 else ""))
+    return lines
+
+
+def _apply_schedule(ctx, rec, lines, upload):
+    """Make ``lines`` the working paper's schedule and its total the supporting balance. Returns a message."""
+    raw = upload.read()
+    upload.seek(0)
+    rec.schedule = lines
+    rec.support_balance = sum((Decimal(line["amount"]) for line in lines), ZERO)
+    rec.schedule_source = {"file": upload.name[:200], "sha256": hashlib.sha256(raw).hexdigest(), "rows": len(lines),
+                           "by": ctx.user.get_username() if ctx.user else "",
+                           "at": timezone.now().isoformat(timespec="seconds")}
+    message = _changed(ctx, rec, f"Schedule from {upload.name}: {len(lines)} line(s), {rec.support_balance:,.2f}.")
+    _audit(ctx, rec, "schedule uploaded", {"file": rec.schedule_source["file"], "sha256": rec.schedule_source["sha256"],
+                                          "rows": len(lines)})
+    return message
+
+
+def upload_schedules(ctx, upload, accounts, balances, period_end, account=None):
+    """``/reconcile [<account>] --<period> << schedule.csv``: the file's schedules onto the period's working papers,
+    all or nothing. With one account, its working paper opens; with several, a summary."""
+    if account is not None:
+        _check_method(account)
+    allowed = [account] if account is not None else [a for a in accounts if a.is_balance_sheet]
+    lines = _read_schedule(ctx, upload, allowed)
+    targets = {a.pk: a for a in allowed if a.pk in lines}
+    if account is not None:
+        with transaction.atomic():
+            rec, message = _working_paper(ctx, account, period_end, balances.get(account.source_id, ZERO))
+            done = _apply_schedule(ctx, rec, lines[account.pk], upload)
+            _close(ctx)
+            ReconSession.objects.create(organisation=ctx.organisation, user=ctx.user, reconciliation=rec)
+        return show(ctx, rec, rec.gl_balance, intro=" ".join(p for p in (message, done) if p))
+    result = Result(f"Schedules from {upload.name} at {fmt(period_end)}",
+                    subtitle=f"{len(targets)} account(s); open one to sign it off")
+    table = result.add(Table([Column("Code"), Column("Account"), Column("Lines", NUMBER), Column("Schedule", MONEY),
+                              Column("Xero balance", MONEY), Column("Reconciling items", MONEY),
+                              Column("Difference", MONEY)]))
+    with transaction.atomic():
+        for pk, target in sorted(targets.items(), key=lambda t: t[1].code):
+            rec, _ = _working_paper(ctx, target, period_end, balances.get(target.source_id, ZERO))
+            _apply_schedule(ctx, rec, lines[pk], upload)
+            table.add(target.code, target.name, len(lines[pk]), rec.support_balance, rec.gl_balance,
+                      rec.items_total, rec.difference)
+    first = min(targets.values(), key=lambda a: a.code)
+    result.add(Note(f"Open one with /reconcile {first.code} --{_label(period_end)} to see its lines and sign it. "
+                    "Anything already signed for these accounts was reopened.", "warning"))
+    return result
+
+
+def _schedule_table(result, rec):
+    source = rec.schedule_source or {}
+    title = "Schedule" + (f" from {source['file']}" if source.get("file") else "")
+    if source.get("ledger"):
+        title = f"Schedule from the Expectation Ledger: {source['journal']}"
+    table = result.add(Table([Column("#", NUMBER), Column("Description"), Column("Reference"), Column("From", DATE),
+                              Column("To", DATE), Column("Notes"), Column("Amount", MONEY)], title=title))
+    ended = []
+    for n, line in enumerate(rec.schedule, 1):
+        end_ = date.fromisoformat(line["to"]) if line.get("to") else None
+        if end_ and end_ <= rec.period_end and Decimal(line["amount"]):
+            ended.append(f"{n} {line['description']}")
+        table.add(n, line["description"], line.get("reference", ""),
+                  date.fromisoformat(line["from"]) if line.get("from") else None, end_, line.get("notes", ""),
+                  Decimal(line["amount"]))
+    table.add(None, "Total", "", None, None, "", rec.support_balance, total=True)
+    if ended:
+        result.add(Note(f"Line(s) whose period ended by {fmt(rec.period_end)} still have a balance: "
+                        + "; ".join(ended[:6]) + ". Check they should still be in the schedule.", "warning"))
+    if source.get("by"):
+        result.add(Note(f"Uploaded by {source['by']} on {source['at'][:10]}; SHA-256 {source['sha256'][:12]}…"))
+    if source.get("ledger"):
+        result.add(Note("The posted (and since closed) lines of this month's accrual journal in the Expectation "
+                        "Ledger (Admin > Accounting). Upload a schedule or type support to use something else."))
+        if source.get("unposted"):
+            result.add(Note(f"{source['unposted']} more line(s) in that journal, {Decimal(source['unposted_total']):,.2f}, "
+                            "aren't marked posted, so they aren't counted. If they're in Xero, mark the journal "
+                            "posted in Admin > Accounting > Expectation Ledger.", "warning"))
 
 
 # --- Parsing --------------------------------------------------------------------------------------------------

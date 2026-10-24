@@ -27,8 +27,10 @@ HOW_TO = {
     "reconcile": "Month-end balance sheet reconciliation before the management accounts go out. /reconcile --Sep "
                  "2026 lists every account to reconcile with its status; /reconcile 090 --Sep 2026 opens a working "
                  "paper: enter the statement or supporting balance, add reconciling items, then prepared and "
-                 "reviewed. Methods and materiality are set per account in Admin > Chart of accounts. /reconcile "
-                 "--bank shows today's unreconciled Xero items.",
+                 "reviewed. Prepayments, accruals, loans and other schedules: /reconcile --template, then "
+                 "/reconcile --Sep 2026 << schedules.csv; the accrual account (e.g. 2000) "
+                 "takes the Expectation Ledger's posted accruals. Methods and materiality are set per account in Admin > "
+                 "Chart of accounts. /reconcile --bank shows today's unreconciled Xero items.",
     "inv": "Open one invoice, bill or credit note by its number, with lines, payments and amount due.",
     "find": "Search contacts and invoice or bill numbers and references, e.g. /find smith.",
     "dim": "See what you can tag by before tagging: Xero's tracking categories (Xero allows 2 active and 4 in all) "

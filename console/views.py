@@ -163,3 +163,13 @@ def splittag_template(request):
     response = HttpResponse(template_csv(), content_type="text/csv; charset=utf-8")
     response["Content-Disposition"] = 'attachment; filename="splittag-template.csv"'
     return response
+
+
+@login_required
+@require_GET
+def reconcile_template(request):
+    from .reconcile import template_csv
+
+    response = HttpResponse(template_csv(), content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = 'attachment; filename="schedule-template.csv"'
+    return response
