@@ -1,0 +1,58 @@
+{% extends "admin/change_form.html" %}
+{% comment %}
+The accrual page is long (settings, then a section per kind of cost). A bar of links at the top jumps to each
+section, with how many profiles it has; each section heading gets a link back to the top. Built from the page's own
+headings, so it follows the sections as they change.
+{% endcomment %}
+
+{% block form_top %}
+<nav id="section-links" aria-label="Sections" style="display:none; position:sticky; top:0; z-index:5;
+     background:var(--body-bg); border-bottom:1px solid var(--hairline-color); padding:8px 0; margin-bottom:12px;
+     line-height:2;"></nav>
+{{ block.super }}
+{% endblock %}
+
+{% block admin_change_form_document_ready %}
+{{ block.super }}
+<script>
+(function () {
+  var nav = document.getElementById("section-links");
+  var form = document.getElementById("accrual_form");
+  if (!nav || !form) { return; }
+  form.id = form.id || "accrual_form";
+  var top = document.getElementById("content") || document.body;
+  top.id = top.id || "content";
+  var headings = form.querySelectorAll("h2.fieldset-heading, h2.inline-heading");
+  var links = [];
+  headings.forEach(function (h, i) {
+    var label = h.firstChild && h.firstChild.nodeType === 3 ? h.firstChild.textContent : h.textContent;
+    label = label.split(" — ")[0].trim();
+    if (!label) { return; }
+    var group = h.closest(".inline-group");
+    var count = "";
+    if (group) {
+      var rows = group.querySelectorAll("tbody tr.form-row:not(.empty-form), .inline-related:not(.empty-form)");
+      count = " (" + rows.length + ")";
+    }
+    var anchor = "section-" + i;
+    (group || h).id = (group || h).id || anchor;
+    var target = (group || h).id;
+    var a = document.createElement("a");
+    a.href = "#" + target;
+    a.textContent = label + count;
+    links.push(a);
+    var back = document.createElement("a");
+    back.href = "#" + top.id;
+    back.textContent = "↑ Top";
+    back.style.cssText = "float:right; font-weight:normal; font-size:0.85em; text-transform:none;";
+    h.appendChild(back);
+  });
+  if (!links.length) { return; }
+  links.forEach(function (a, i) {
+    if (i) { nav.appendChild(document.createTextNode(" · ")); }
+    nav.appendChild(a);
+  });
+  nav.style.display = "block";
+})();
+</script>
+{% endblock %}

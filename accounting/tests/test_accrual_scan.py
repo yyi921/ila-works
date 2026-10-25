@@ -39,7 +39,7 @@ def test_scan_sorts_each_cost_into_its_behaviour(ledger):
 
 def test_variable_cost_learns_supplier_lag_accuracy_and_seasonality(ledger):
     power = by_account(scan(ledger.accrual, START, END))["6100"]
-    assert power.supplier == ledger.origin and power.supplier_found_by == "description"
+    assert power.supplier == ledger.origin and power.supplier_found_by == "bills"  # the bill, not the words
     assert list(power.tracking.all()) == [ledger.hall]
     assert power.months_accrued == 24 and power.is_current
     assert power.billing_lag_days == 12
@@ -48,8 +48,8 @@ def test_variable_cost_learns_supplier_lag_accuracy_and_seasonality(ledger):
     assert "Reversed on day 1 of the next month in 24 of 24 months" in power.memo
     assert "higher in Jan, Feb, Dec" in power.memo
     assert power.method == Method.RUN_RATE and power.amount == D("15000.00")
-    assert power.rule_text.startswith("Accrue the run-rate ($15,000) × the month's seasonal index, Dr 6100 "
-                                      "(Main Hall)")
+    assert power.rule_text.startswith("Accrue the month's bill if it's in by the close, else the average of the 3 "
+                                      "months before (now $15,000) × the month's seasonal index, Dr 6100 (Main Hall)")
 
 
 def test_supplier_found_from_bills_when_the_journal_does_not_name_it(ledger):
@@ -62,7 +62,7 @@ def test_fixed_cost_without_bills_says_so(ledger):
     software = by_account(scan(ledger.accrual, START, END))["6200"]
     assert software.average == D("1200.00")
     assert "No bill within 35%" in software.memo
-    assert software.rule_text.startswith("Accrue $1,200 every month")
+    assert software.rule_text.startswith("Accrue the month's bill if it's in by the close, else $1,200 every month")
 
 
 def test_driver_cost_follows_events(ledger):
@@ -187,4 +187,4 @@ def test_management_command_prints_memos_and_rules(ledger):
     text = out.getvalue()
     assert "TECC: 6 profiles, Oct 2024 to Sep 2026" in text
     assert "[Variable recurring] Origin Energy Pty Ltd — 6100 Electricity (Main Hall)" in text
-    assert "Rule: Accrue $1,200 every month" in text
+    assert "Rule: Accrue the month's bill if it's in by the close, else $1,200 every month" in text
