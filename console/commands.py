@@ -865,6 +865,24 @@ def reconcile(ctx, cmd):
     return start(ctx, cmd)
 
 
+@command(
+    "accrue",
+    summary="Month-end accrual review: proposed accruals by source with their evidence; accept, adjust or reject "
+            "each, then build the journal file.",
+    usage="/accrue [--<period>] [--read | --refresh]",
+    params=[
+        ("--<period>", "The month, e.g. Sep 2026; default last month"),
+        ("--read", "Read the PDFs of bills that came after month end (in the background)"),
+        ("--refresh", "Work the proposals out again; decided lines are kept"),
+    ],
+    examples=["/accrue", "/accrue --Sep 2026", "/accrue --read --Sep 2026", "/accrue --refresh"],
+)
+def accrue(ctx, cmd):
+    from .accrue import start
+
+    return start(ctx, cmd)
+
+
 # --- Lookups ---------------------------------------------------------------------------------------------------
 
 
@@ -1168,7 +1186,7 @@ def clean(ctx, cmd):
 
 
 @command("cancel", summary="Drop your open /splittag or /tag preview, /createTag or /_createInvoice draft, or "
-                           "close a /reconcile working paper. Nothing is saved.",
+                           "close a /reconcile working paper or /accrue review. Nothing is saved.",
          usage="/cancel", examples=["/cancel"], needs_source=False)
 def cancel(ctx, cmd):
     read_params(cmd, ctx)

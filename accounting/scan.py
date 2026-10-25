@@ -152,12 +152,13 @@ def default_window(history_months, today=None):
 
 
 def copy_history(accrual, source, start, end):
-    """Copy bills, credit notes, bank transactions and manual journals for the window from the source system,
-    plus the bill window after it."""
+    """Copy bills, sales invoices, credit notes, bank transactions and manual journals for the window from the
+    source system, plus the bill window after it. Sales invoices say which events were held and which costs were
+    recovered from the client."""
     from xero.sync import copy_period
 
     end = min(end + timedelta(days=accrual.bill_window_days), timezone.localdate())
-    return copy_period(accrual.organisation, source, ("bills", "credits", "bank", "journals"), start, end)
+    return copy_period(accrual.organisation, source, ("invoices", "bills", "credits", "bank", "journals"), start, end)
 
 
 def bills_for(organisation, accounts, start, end, supplier=None):

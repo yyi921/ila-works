@@ -141,6 +141,7 @@ XERO_SCOPES = env(
         "accounting.reports.banksummary.read",
         "accounting.reports.aged.read",
         "accounting.budgets.read",
+        "accounting.attachments.read",
     ]),
 )
 XERO_AUTHORIZE_URL = "https://login.xero.com/identity/connect/authorize"

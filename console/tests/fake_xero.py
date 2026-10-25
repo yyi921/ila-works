@@ -292,7 +292,7 @@ class FakeClient(XeroClient):
         super().__init__(SimpleNamespace(scopes=scopes, tenant_id=f"fake-{uuid.uuid4()}"))
         self.calls = []
 
-    def _request(self, path, params, *, retried=False):
+    def _request(self, path, params, *, retried=False, raw=False):
         self.calls.append((path, dict(params)))
         return route(path, params)
 

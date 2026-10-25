@@ -4,7 +4,7 @@ A practical guide to the iLA console: what each command is for, how to type it, 
 full list of parameters with examples, see [Command reference](Command%20reference.md), or type `/help <command>` in
 the console.
 
-_Last updated: 24 October 2026 (`/reconcile` schedules from a CSV, and accruals from the Expectation Ledger)._
+_Last updated: 25 October 2026 (added `/accrue`, the month-end accrual review, and reading bill PDFs)._
 
 ---
 
@@ -90,6 +90,8 @@ Quarters and financial years follow the year end set in Xero.
 | Save the reconciliation pack for the month-end file | `/reconcile --Sep 2026 >> reconciliations.xlsx` |
 | Support prepayments, accruals or a loan with a schedule | `/reconcile --template`, then `/reconcile --Sep 2026 << schedules.csv` |
 | Check how many Xero items are still unreconciled today | `/reconcile --bank` |
+| Review the month's accruals and build the journal file | `/accrue --Sep 2026`, then `accept bills`, `why 8`, `build` |
+| Let iLA read the PDFs of bills that came after month end | `/accrue --read --Sep 2026`, then `/accrue --refresh` |
 | Spot unusual or missing supplier bills | `/compare --bill` |
 | Look at one supplier over 12 months | `/compare --bill Origin Energy` |
 | Watch consultancy spend | `/compare --bill --account Consulting --detail` |
@@ -162,6 +164,47 @@ Quarters and financial years follow the year end set in Xero.
 - **Purpose:** bills due in the next 7 days, overdue ones first.
 - **Syntax:** `/bills [--due <days>] [--overdue] [>> file.xlsx]`
 - **Use it:** to plan the payment run. `--due 14` looks two weeks ahead; `--overdue` shows only overdue bills.
+
+### Month-end accruals
+
+#### `/accrue` — the month-end accrual review
+- **Purpose:** see what iLA proposes to accrue for the month, with the reason and evidence for each line; accept,
+  adjust or reject each with a reason; then build the Xero manual journal file. **Xero isn't changed**: you stamp
+  and import the file.
+- **Syntax:** `/accrue [--<period>] [--read | --refresh]` (default: last month)
+- **Set-up (once):** Admin → Accounting → Accruals: the organisation's accrual account (TECC 2000) and history, then
+  *Copy history from Xero, then scan*. The scan learns one profile per cost account and department, with a memo and
+  the judgement (e.g. "variable recurring: the bill when it's in, else the average of the last 3 months").
+- **What you see:**
+  - **Bills after month end:** the bill for the month, found by the supplier's usual billing lag or the event date on
+    the bill line, or placed by its PDF once read. These match what an accountant accrues "based on invoice".
+  - **Estimates (no bill yet):** from months before the one being accrued (never from what is already posted for
+    it): the usual amount, the average of recent months, or events held × the usual cost per event.
+  - **To review:** bills the rules can't place, e.g. an event supplier's bill with no event on it, or a supplier
+    never accrued on that account before. Add them by hand (Admin → Expectation Ledger) if they're for the month.
+  - Figures: proposed, accepted, to review, and what was accrued in Xero (for comparison only).
+- **In the open review, type:**
+
+  | Type | What it does |
+  | --- | --- |
+  | `accept 1-5`, `accept all`, `accept bills`, `accept estimates` | Accept lines (only accepted or adjusted lines go into the file) |
+  | `adjust 3 1,200 <reason>` | Change the amount, with the reason (the proposed amount is kept) |
+  | `reject 4 <reason>` | Leave a line out, with the reason |
+  | `undo 2` | Back to a proposal |
+  | `why 3` | The evidence: bills (and what the PDF says, with its words and page), what iLA learned, the rule, the history |
+  | `read` | Read the PDFs of bills after month end, in the background (a few minutes) |
+  | `refresh` | Work the proposals out again (after reading PDFs, or new bills); decided lines are kept |
+  | `compare` | Expected vs accrued in Xero, by account |
+  | `build` | Build and stamp the journal file (accrual at month end, reversal on day 1) to download and import |
+  | `done` (or `/cancel`) | Close the review; decisions are kept |
+
+- **Bill PDFs:** `read` (or `/accrue --read`) reads the attachments of bills dated after month end on accrued accounts.
+  The AI records only what the bill states (service period, event and date, dated lines, PO) with its words and
+  page; iLA's rules then decide the month: an event held by month end, or a service period ended by it, is the
+  month's; one after isn't; a period across month end is split by days. Each file is read once; iLA keeps what was
+  read, not the file. It needs Xero's attachments permission: reconnect once with `/connect`.
+- **Admin → Expectation Ledger** shows the same journal: lines with their decision, *Compared with Xero*, *Accruals
+  still open in Xero* at month end, and actions (accept all, build, mark posted).
 
 ### Month-end reconciliation
 
@@ -526,6 +569,9 @@ Nothing is written to Xero; a person imports the file.
 | `/_createInvoice` says there's no invoice set-up | Add one in admin → Organisation → Invoice set-ups. |
 | Figures look a few minutes old | Xero reads are cached for 5 minutes. |
 | `/reconcile` says an account has no reconciliation method | An admin sets it in Admin → Chart of accounts. |
+| `/accrue` says there's no accrual set-up | Admin → Accounting → Accruals: add the organisation's accrual account, then *Copy history from Xero, then scan*. |
+| `/accrue` `read` says Xero refused access | iLA needs Xero's attachments permission: type `/connect` and reconnect the organisation. |
+| `build` says no line is accepted | Accept (or adjust) lines first, e.g. `accept bills`. |
 | `/reconcile` lists accounts "not in iLA's chart of accounts yet" | Admin → Organisations → tick it → Refresh chart of accounts from Xero. |
 | `prepared` says there's a difference | Explain it with `add <amount> <description>` (or correct the supporting balance) until the difference is nil. |
 | A signed reconciliation is back to Difference | The Xero balance changed after sign-off (e.g. a back-dated entry). Check it, then prepare and review again. |
@@ -541,7 +587,10 @@ Planned, not built yet:
   evidence; stamping the signed pack.
 - `/split`: reclassify amounts between GL accounts (e.g. COGS into food and beverage) as a Xero manual journal import file that you check, stamp and import, using the same CSV and rules as `/splittag`. Xero is never posted to directly.
 - Plain-English corrections in a `/tag` preview, and `skip`/`set` by contact or text, `untag`.
-- Purchase orders, and reading attached PDFs to find the event.
+- **`/accrue` next (agreed plan):** the accrual schedule with last month's items still owed, linked to
+  `/reconcile 2000`, and a reasonableness check by account (Phase B); event costs: events held whose recovered
+  costs (security, first aid, AV, cleaning) aren't billed yet (Phase C); learning from your decisions (Phase D).
+- Purchase orders.
 - `/_createInvoice` from timesheets (day lines, hours × rate, job codes).
 - `_checkBill` and `_recFA` templates.
 - `--last N months` period syntax.
@@ -554,6 +603,7 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 25 Oct 2026 | Added `/accrue`: the month's proposed accruals by source with evidence; accept, adjust or reject each with a reason; `why`, `compare`, `build`. Reading bill PDFs (`read`) to place bills in their month (needs a reconnect for Xero's attachments permission). Accrual history now includes sales invoices. |
 | 24 Oct 2026 | `/reconcile`: the accrual account (e.g. 2000) takes its schedule from the Expectation Ledger's posted accrual lines for the month. |
 | 24 Oct 2026 | `/reconcile` schedules: `/reconcile --template`, and `<< schedule.csv` for one account or (with an Account column) several; the total is the supporting balance, lines with an ended period are flagged. |
 | 24 Oct 2026 | Added `/reconcile` (balance sheet reconciliation with working papers and sign-off); `/recon` and `/rec` now open it and the old bank status is `/reconcile --bank`. Chart of accounts in admin, with reconciliation method and materiality per account. |

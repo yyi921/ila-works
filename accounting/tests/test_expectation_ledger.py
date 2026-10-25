@@ -12,7 +12,7 @@ from django.core.management import call_command
 from django.urls import reverse
 
 from accounting.ledger import LedgerError, build_import_file, check_bills, mark_posted, run_accruals
-from accounting.models import AccrualProfile, Expectation, LedgerJournal, State
+from accounting.models import AccrualProfile, Decision, Expectation, LedgerJournal, State
 from accounting.scan import scan
 from core.models import Contact, ImportFile
 
@@ -86,6 +86,11 @@ def test_lifecycle_to_closed_feeds_the_profile(learned, user):
     journal = run_accruals(learned.accrual, SEP, user)
     with pytest.raises(LedgerError, match="Build and stamp"):
         mark_posted(journal, user)
+    with pytest.raises(LedgerError, match="No line is accepted yet"):
+        build_import_file(journal, user)  # proposals aren't posted until a person accepts them
+    for line in journal.lines.all():
+        line.decide(Decision.ACCEPTED, user)
+        line.save()
 
     import_file = build_import_file(journal, user)
     assert import_file.status == ImportFile.Status.STAMPED and import_file.stamp_is_valid(bytes(import_file.content))
@@ -184,6 +189,7 @@ def test_admin_runs_edits_and_moves_journals(learned, user, client):
     assert "deleted line" in journal.notes
 
     changelist = reverse("admin:accounting_ledgerjournal_changelist")
+    client.post(changelist, {"action": "accept_all", "_selected_action": [journal.pk]})
     client.post(changelist, {"action": "build_file", "_selected_action": [journal.pk]})
     client.post(changelist, {"action": "posted", "_selected_action": [journal.pk]})
     journal.refresh_from_db()
@@ -197,3 +203,29 @@ def test_run_accruals_command(learned):
     assert "Accruals September 2026: Predicted, 4 lines" in text
     assert "[Evidenced] Origin Energy Pty Ltd Sep 2026: 15,450.00" in text
     assert "left out: 6400 Rates: prepayment, not accrued" in text
+
+
+def test_decisions_are_kept_and_only_accepted_lines_are_posted(learned, user):
+    journal = run_accruals(learned.accrual, SEP, user)
+    found = lines(journal)
+    found["6200"].decide(Decision.REJECTED, user, "Microsoft billed in advance")
+    found["6200"].save()
+    found["6300"].decide(Decision.ADJUSTED, user, "Only two events had security", amount=D("4000"))
+    found["6300"].save()
+    found["6100"].decide(Decision.ACCEPTED, user)
+    found["6100"].save()
+
+    journal = run_accruals(learned.accrual, SEP, user)  # a re-run keeps decided lines, replaces the rest
+    found = lines(journal)
+    assert found["6300"].expected_amount == D("4000") and found["6300"].proposed_amount == D("6000.00")
+    assert found["6300"].history[-1]["why"] == "Adjusted: Only two events had security"
+    assert found["6200"].decision == Decision.REJECTED and found["6600"].decision == ""
+
+    import_file = build_import_file(journal, user)
+    rows = list(csv.reader(io.StringIO(bytes(import_file.content).decode())))
+    assert sorted({r[3] for r in rows[1:]} - {"2000"}) == ["6100", "6300"]  # not the rejected or undecided lines
+    mark_posted(journal, user)
+    assert lines(journal)["6600"].state == State.EVIDENCED and lines(journal)["6100"].state == State.POSTED
+
+    found["6300"].undecide(user)
+    assert found["6300"].expected_amount == D("6000.00") and found["6300"].decision == ""

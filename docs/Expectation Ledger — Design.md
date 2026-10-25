@@ -82,6 +82,69 @@ Everything is editable in admin. The thresholds the scan uses (fixed if variatio
 Next: Claude reviews what the rules can't place (an untagged bill like Wild Gravity 3869, narrations with no invoice, the memo's wording), proposing for a person to accept; payroll accruals from pay runs.
 
 
+### The month-end accrual close: agreed plan (25 Oct 2026)
+
+Goal: the accrual works like an experienced accountant's, within the business. At month end the accrual balance is a
+**list of items, each with a reason and evidence**, built from five sources in order of trust, judged, reviewed,
+posted, and reconciled to that list.
+
+| # | Source | The question | Evidence |
+| --- | --- | --- | --- |
+| 1 | Last month rolled forward | What did I accrue? Has its bill arrived? Was it reversed? | Last month's schedule, bills, reversals |
+| 2 | Bills after month end | Which bills received since cut-off are for work done by month end? | The bill and its PDF (service period, event date) |
+| 3 | What the business did | Which events were held, which costs do they incur, which are unbilled? | Event calendar, recovery revenue, the event's history |
+| 4 | What normally happens | Which recurring costs aren't billed yet? | Average of the last N months, billing lag |
+| 5 | Reasonableness | Does each cost account look right against its usual level? A big drop is usually a missing bill. | Cost by account vs trailing average |
+
+Decisions (25 Oct 2026):
+
+- **Bill PDFs:** read with the Xero attachments permission (`accounting.attachments.read`, one reconnect per organisation),
+  **close window only**: bills dated after month end up to the close, on accounts that are accrued. Each PDF is read
+  once and kept with its SHA-256. Claude extracts the service period, event date(s) and name, venue, lines with
+  dates and PO, each with the words and page it came from; code decides the month (service ended by month end: the
+  month's; spans months: pro-rated; event held in the month: that event's). A PDF that disagrees with Xero's tags is
+  flagged, not guessed.
+- **Recoveries are mostly billed at cost:** a recovery line on an event's sales invoice (4020 Equipment Hire, 4063 First
+  Aid, 4064 Security, 4062 Cleaning, 4061 Wages recovered) means the paired cost was incurred, and the recovery amount
+  is the expected cost. Pairs are proposed from account names and history and confirmed in admin.
+- **Workspace:** a console command, `/accrue --Sep 2026`, like `/reconcile`: proposals by source with evidence, accept /
+  adjust / reject with a reason, then build the journal file. Admin keeps the settings.
+- **Order:** A then B, then C, then D.
+
+Each schedule line carries its **source** (subsequent bill, recurring estimate, event expectation, payroll, brought
+forward, manual), its **evidence**, the **decision** (accept, adjust, reject; reason, who, when) and the **reversal**
+(day 1, or carried until the bill arrives). Approved lines build the Xero journal file (stamped; a person imports it).
+`/reconcile 2000` takes the approved schedule plus last month's items still owed as the accrual account's support; what
+Xero has that the schedule doesn't (a manual accrual, an old accrual never reversed) is a reconciling item with an
+action. Decisions and outcomes teach the profiles. The AI reads PDFs, proposes what rules can't place and explains why;
+code computes every amount; nothing changes without approval; iLA never posts.
+
+**Phase A: evidence and approvals.**
+1. Attachments: the permission; list and download a bill's attachments; read close-window PDFs with Claude into a
+   stored reading (bill, file, SHA-256, extracted facts with quotes, model, when); placement rules in code; the
+   reading shown with the bill's evidence on each line. A PDF is never stored by iLA, only what was read from it.
+2. Copy sales invoices with the accrual history (needed for recoveries and the event calendar).
+3. Decisions on each proposed line: accept, adjust (amount, account, reason) or reject (reason); who and when; only
+   accepted and adjusted lines go into the journal file.
+4. `/accrue [--<period>]`: run or refresh the month's proposals and show them by source (with "to review" first);
+   plain answers in the open review: `accept 1-5`, `accept evidenced`, `adjust 3 1,200 <reason>`, `reject 4 <reason>`,
+   `why 3`, `build` (journal file), `done`.
+
+**Phase A built (25 Oct 2026).** `accounting/reading.py` (PDF facts with quotes; placement rules in code; `BillReading` kept by SHA-256), the reading job (`jobs.read_bills`), PDF placement used first by the run and by Check for bills, sales invoices in the accrual copy, `Decision` on each line (accept/adjust/reject, reason, who, when; only accepted and adjusted lines are built and posted; a re-run keeps decided lines), and `/accrue` (`console/accrue.py`). TECC September in `/accrue`: six bill-based lines matching TECC's own, two estimates, two to review, 22 bills with PDFs to read.
+
+**Phase B: the schedule and /reconcile 2000.** Brought-forward items (source 1) from the open-accruals analysis with
+their status; the reasonableness check (source 5); the schedule as `/reconcile 2000`'s support with Xero-only items as
+reconciling items.
+
+**Phase C: event costs (source 3).** Event calendar from the Event dimension's dates (and events on sales invoices);
+expected cost types per event from recovery lines, else the history of similar events; covered by a bill tagged to the
+event (in the month, or after month end and confirmed by its PDF), else a proposed missing accrual (recovery amount, or
+the usual cost for that kind of event) with the usual supplier and lag. Needs: recovery↔cost pairs confirmed, the
+calendar complete, an event type on the Event dimension if type-based patterns are wanted.
+
+**Phase D: learning.** Rejections and adjustments with reasons become rules; each closed accrual against its bill sets
+the cost's accuracy, and accuracy decides how much review it needs.
+
 ### Engine 2: cut-off scanner
 
 For the September close, scan everything arriving from 1 October to the close date.

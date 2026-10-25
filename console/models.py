@@ -192,6 +192,25 @@ class ReconSession(TenantModel):
         return f"Working paper {self.reconciliation} ({self.get_status_display()})"
 
 
+class AccrueSession(TenantModel):
+    """A month's accrual review open in the console (/accrue), so plain input (accept 1-5, adjust 3 1200 ...,
+    build) goes to it. The proposals and decisions live on the Expectation Ledger journal."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        CLOSED = "closed", "Closed"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    journal = models.ForeignKey("accounting.LedgerJournal", on_delete=models.CASCADE, related_name="+")
+
+    class Meta(TenantModel.Meta):
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Accrual review {self.journal} ({self.get_status_display()})"
+
+
 class CommandReference(models.Model):
     """One native iLA command, as defined in code: syntax, parameters and examples. Refreshed from the command
     registry after every migrate and by ``manage.py sync_command_reference``, so it never drifts from what the
