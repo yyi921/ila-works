@@ -33,13 +33,14 @@ class Behaviour(models.TextChoices):
     DRIVER = "driver", "Driver-linked"
     PERIODIC = "periodic", "Periodic, non-monthly"
     ONE_OFF = "one_off", "One-off"
+    PAYROLL = "payroll", "Payroll"
 
 
 class Method(models.TextChoices):
     """How a run works out the amount to accrue."""
 
-    FIXED = "fixed", "Fixed amount"
-    RUN_RATE = "run_rate", "Run-rate × seasonality"
+    FIXED = "fixed", "Bill after month end, else the fixed amount"
+    RUN_RATE = "run_rate", "Bill after month end, else the average of recent months"
     DRIVER_RATE = "driver_rate", "Driver volume × rate"
     PREPAYMENT = "prepayment", "Prepayment / amortisation (not accrued)"
     EVIDENCE_ONLY = "evidence_only", "Only from evidence (a bill after month end)"
@@ -48,7 +49,7 @@ class Method(models.TextChoices):
 
 METHOD_FOR = {Behaviour.FIXED: Method.FIXED, Behaviour.VARIABLE: Method.RUN_RATE,
               Behaviour.DRIVER: Method.DRIVER_RATE, Behaviour.PERIODIC: Method.PREPAYMENT,
-              Behaviour.ONE_OFF: Method.EVIDENCE_ONLY}
+              Behaviour.ONE_OFF: Method.EVIDENCE_ONLY, Behaviour.PAYROLL: Method.NONE}
 
 # Shown with each section in admin: examples and how it is accrued.
 BEHAVIOUR_GUIDE = {
@@ -58,6 +59,9 @@ BEHAVIOUR_GUIDE = {
                        "Driver volume × learned rate"),
     Behaviour.PERIODIC: ("Quarterly rates, annual insurance", "Prepayment or amortisation, not accrual"),
     Behaviour.ONE_OFF: ("Repairs, consultants", "Only accrue from evidence (cut-off scan, PO, user input)"),
+    Behaviour.PAYROLL: ("Salaries, leave, super, payroll tax, Workcover",
+                        "Kept apart: payroll accruals (days since the last pay run × run-rate, plus on-costs) are "
+                        "worked out separately, not yet built"),
 }
 
 

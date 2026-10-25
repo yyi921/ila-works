@@ -1,10 +1,14 @@
+from decimal import Decimal
+
 from django import forms
 from django.contrib import admin, messages
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html, format_html_join, linebreaks
+from django.utils.safestring import mark_safe
 
 from . import jobs
+from .balance import compare, open_accruals
 from .ledger import LedgerError, build_import_file, check_bills, mark_posted, run_accruals
 from .models import (BEHAVIOUR_GUIDE, Accrual, AccrualProfile, Behaviour, Cogs, Expectation, LedgerJournal,
                      Prepayment, State)
@@ -364,10 +368,19 @@ class LedgerJournalAdmin(SameOrganisation, admin.ModelAdmin):
     actions = ["rerun", "find_bills", "build_file", "posted"]
     inlines = [ExpectationInline]
     readonly_fields = ("organisation", "state", "skipped_table", "file_link", "created_by", "posted_by", "posted_at",
-                       "lifecycle")
+                       "lifecycle", "compare_table", "open_table")
     fieldsets = (
         (None, {"fields": ("accrual", "kind", "period_end", "narration", "state", "lifecycle", "notes")}),
         ("Left out of this run", {"fields": ("skipped_table",)}),
+        ("Compared with Xero", {
+            "fields": ("compare_table",),
+            "description": "What this journal expects against what was accrued in Xero for the month (manual "
+                           "journals crediting the accrual account, reversals left out). Xero's accruals are never "
+                           "an input to the expectation: this is only the comparison."}),
+        ("Accruals still open in Xero", {
+            "fields": ("open_table",), "classes": ("collapse",),
+            "description": "Every accrual on the accrual account not yet reversed or cleared at the month end, from "
+                           "the history copied into iLA, with whether its invoice has arrived."}),
         ("Posting", {"fields": ("file_link", "created_by", "posted_by", "posted_at")}),
     )
 
@@ -449,8 +462,41 @@ class LedgerJournalAdmin(SameOrganisation, admin.ModelAdmin):
     def skipped_table(self, obj):
         if not obj.skipped:
             return "Nothing."
-        rows = ((s.get("profile", ""), s.get("why", "")) for s in obj.skipped)
-        return format_html("<table>{}</table>", format_html_join("", "<tr><td>{}</td><td>{}</td></tr>", rows))
+        ordered = sorted(obj.skipped, key=lambda s: (not s.get("review"), s.get("profile", "")))
+        rows = ((s.get("profile", ""), "To review" if s.get("review") else "", s.get("why", "")) for s in ordered)
+        return format_html("<table>{}</table>",
+                           format_html_join("", "<tr><td>{}</td><td><strong>{}</strong></td><td>{}</td></tr>", rows))
+
+    @admin.display(description="By account")
+    def compare_table(self, obj):
+        if not obj.pk:
+            return "–"
+        rows = compare(obj)
+        if not rows:
+            return "Nothing expected and nothing accrued in Xero."
+        body = [(f"{a.code} {a.name}", f"{e:,.2f}", f"{x:,.2f}", f"{d:,.2f}") for a, e, x, d in rows]
+        totals = [sum(r[i] for r in rows) for i in (1, 2, 3)]
+        body.append(("Total", *(f"{t:,.2f}" for t in totals)))
+        head = mark_safe("<tr><th>Account</th><th>Expected</th><th>Accrued in Xero</th><th>Difference</th></tr>")
+        return format_html("<table>{}{}</table>", head, format_html_join(
+            "", '<tr><td>{}</td><td style="text-align:right">{}</td><td style="text-align:right">{}</td>'
+                '<td style="text-align:right">{}</td></tr>', body))
+
+    @admin.display(description="Open at the month end")
+    def open_table(self, obj):
+        if not obj.pk:
+            return "–"
+        still, first = open_accruals(obj.accrual, obj.period_end)
+        if not still:
+            return "Nothing open."
+        total = sum((a.open for a in still), Decimal("0"))
+        body = [(f"{a.date:%d %b %Y}", a.narration[:90], f"{a.open:,.2f}", a.status(obj.period_end)) for a in still]
+        body.append(("", "Total of what was read", f"{total:,.2f}", ""))
+        note = (f"Read from {first:%d %b %Y}. A debit that matches no accrual is usually the reversal of one from "
+                "before then; copy more history to pair them up. The total differs from Xero's balance by "
+                "whatever was open before the history began." if first else "")
+        return format_html("<p>{}</p><table>{}</table>", note, format_html_join(
+            "", '<tr><td>{}</td><td>{}</td><td style="text-align:right">{}</td><td>{}</td></tr>', body))
 
     def _each(self, request, queryset, do, done):
         for journal in queryset:

@@ -2,9 +2,10 @@
 
     predicted → evidenced → posted → closed
 
-- **predicted**: a run works out the amount from the profile's rule (fixed, run-rate × season, driver × rate).
-- **evidenced**: a bill for the month has arrived after month end (or a person attached evidence); the line takes
-  the bill's amount.
+- **evidenced**: a bill for the month has arrived after month end, within the cost's usual billing lag (or a person
+  attached evidence); the line is the bill's amount. A run looks for these first.
+- **predicted**: no bill yet, so the profile's rule gives the amount (the usual amount, the average of the months
+  before, driver × rate), learned only from months before the one being accrued.
 - **posted**: the journal import file was built and stamped, and a person confirmed it is in the ledger.
 - **closed**: the actual bill for the month is in; the variance is recorded and fed back to the profile.
 
@@ -14,22 +15,25 @@ posting means a person imports the stamped file.
 
 import csv
 import io
+import re
 import statistics
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
 
-from core.models import AuditLog, ImportFile, SourceSystem
+from core.models import AuditLog, DimensionValue, Document, DocumentLine, ImportFile, SourceSystem
 
-from .models import Expectation, LedgerJournal, Method, State
+from .models import Behaviour, Expectation, LedgerJournal, Method, State
 from .rules import expected
 from .scan import bills_for
 from .util import add_months, money, month_end, month_start
 
 RUN = "run"
 BILL_CHECK = "bill check"
+MONTHLY = (Behaviour.FIXED, Behaviour.VARIABLE)  # billed about once a month
+CUT_OFF_DAYS = 15  # how long after month end to look for the month's bill when the history shows no lag
 XERO_JOURNAL_COLUMNS = ["*Narration", "*Date", "Description", "*AccountCode", "*TaxRate", "*Amount",
                         "TrackingName1", "TrackingOption1", "TrackingName2", "TrackingOption2"]
 
@@ -68,20 +72,47 @@ def run_accruals(accrual, period_end, user=None, journal=None):
     kept = set(journal.lines.values_list("profile_id", flat=True))
 
     skipped = []
-    for profile in accrual.profiles.select_related("account", "supplier").prefetch_related("tracking"):
+    used = {e.get("document_id") for line in journal.lines.all() for e in line.evidence if e.get("document_id")}
+    # Profiles with a known supplier take their own bills first, so an account-wide search can't take them.
+    profiles = sorted(accrual.profiles.select_related("account", "supplier", "accrual").prefetch_related("tracking"),
+                      key=lambda p: (p.supplier_id is None, p.pk))
+    events = event_dates(accrual.organisation)
+    for profile in profiles:
         why = None
-        amount, basis = None, ""
+        amount, basis, bills = None, "", []
         if profile.pk in kept:
             continue
         if not profile.is_active:
             why = "switched off"
-        elif profile.skip_if_bill_posted and (bill := _bill_already_posted(profile, start, period_end)):
+        elif (profile.behaviour in MONTHLY and profile.skip_if_bill_posted
+              and (bill := _bill_already_posted(profile, start, period_end))):
+            # billed once a month and the month's bill is in: a bill after month end is next month's
             why = f"bill {bill[2]} dated {bill[0]:%d %b} already posted"
-        else:
-            amount, basis = expected(profile, start, period_end)
-            if amount is None and profile.method != Method.EVIDENCE_ONLY:
-                why = basis
-            elif amount is not None and amount < accrual.materiality:
+        else:  # a bill after month end is evidence first; "already billed" only stops an estimate
+            if profile.method not in (Method.PREPAYMENT, Method.NONE):
+                bills, review, later = cut_off_bills(profile, period_end, used, events)
+                for bill_date, contact, doc, net, names in later:
+                    skipped.append({"profile": profile.name, "profile_id": profile.pk,
+                                    "why": f"bill {doc.number or 'without a number'} from "
+                                           f"{contact.name if contact else 'no supplier'} dated {bill_date:%d %b}, "
+                                           f"{money(net)}: for {', '.join(names[:3])}, held after month end"})
+                for bill_date, contact, doc, net, reason in review:
+                    skipped.append({"profile": profile.name, "profile_id": profile.pk, "review": True,
+                                    "why": f"to review: bill {doc.number or 'without a number'} from "
+                                           f"{contact.name if contact else 'no supplier'} dated {bill_date:%d %b}, "
+                                           f"{money(net)}: {reason}; add it by hand if it's for this month"})
+            if bills:
+                amount = sum((net for _, _, _, net in bills), Decimal("0"))
+                basis = ("bill " if len(bills) == 1 else "bills ") + ", ".join(
+                    f"{doc.number or 'without a number'} ({contact.name if contact else 'no supplier'}, "
+                    f"{bill_date:%d %b})" for bill_date, contact, doc, _ in bills)
+            elif profile.skip_if_bill_posted and (bill := _bill_already_posted(profile, start, period_end)):
+                why = f"bill {bill[2]} dated {bill[0]:%d %b} already posted"
+            else:
+                amount, basis = expected(profile, start, period_end)
+                if amount is None:
+                    why = "no bill found after month end" if profile.method == Method.EVIDENCE_ONLY else basis
+            if amount is not None and amount < accrual.materiality:
                 why = f"{money(amount)} is below the {money(accrual.materiality)} materiality floor"
         if why:
             skipped.append({"profile": profile.name, "profile_id": profile.pk, "why": why})
@@ -89,10 +120,20 @@ def run_accruals(accrual, period_end, user=None, journal=None):
         line = Expectation(organisation=accrual.organisation, journal=journal, profile=profile,
                            description=f"{profile.name.split(' — ')[0]} {period_end:%b %Y}"[:255],
                            account=profile.account, supplier=profile.supplier,
-                           expected_amount=amount or Decimal("0"), basis=basis,
+                           expected_amount=amount or Decimal("0"), basis=basis[:255],
                            reverse_next_month=profile.reverse_next_month, confidence=profile.confidence)
-        line.move(State.PREDICTED, user or RUN, f"Predicted by the rule: {basis}" if amount is not None
-                  else "Waiting for evidence (only accrued from a bill)", amount=line.expected_amount)
+        if bills:
+            for bill_date, contact, doc, net in bills:
+                used.add(doc.pk)
+                line.evidence = line.evidence + [{
+                    "type": "bill", "document_id": doc.pk, "number": doc.number, "date": bill_date.isoformat(),
+                    "supplier": contact.name if contact else "", "amount": str(net)}]
+            line.supplier = line.supplier or (bills[0][1] if len({b[1] for b in bills}) == 1 else None)
+            line.confidence = 0.95 if profile.supplier_id else 0.8
+            line.move(State.EVIDENCED, user or RUN, f"In by the close: {basis}", amount=line.expected_amount)
+        else:
+            line.move(State.PREDICTED, user or RUN, f"No bill yet; predicted by the rule: {basis}",
+                      amount=line.expected_amount)
         line.save()
         line.tracking.set(profile.tracking.all())
     journal.skipped = skipped
@@ -110,6 +151,103 @@ def run_accruals(accrual, period_end, user=None, journal=None):
                             target_id=str(journal.pk),
                             result={"lines": journal.lines.count(), "skipped": len(journal.skipped)})
     return journal
+
+
+def cut_off_days(profile, period_end):
+    """How long after month end a bill for the month can be dated: the longest lag seen in the months before it plus
+    a week, else CUT_OFF_DAYS; never more than the set-up's bill window."""
+    cut = period_end.strftime("%Y-%m")
+    lags = [lag for m, lag in ((profile.amount_model or {}).get("lag_by_month") or {}).items() if m < cut]
+    days = max(lags) + 7 if lags else CUT_OFF_DAYS
+    return max(1, min(days, profile.accrual.bill_window_days))
+
+
+CODE_DATE = re.compile(r"^(\d{2})(\d{2})(\d{2})")  # event codes that start with the date: 261008MEL = 8 Oct 2026
+
+
+def event_dates(organisation):
+    """{tracking option id: event date}: from the dimension value linked to the option (its start date), else a
+    date the option's name starts with (YYMMDD)."""
+    from core.models import TrackingOption
+
+    dates = {}
+    for value in DimensionValue.objects.filter(organisation=organisation, tracking_option__isnull=False):
+        start = (value.attributes or {}).get("start_date") or (value.attributes or {}).get("date")
+        try:
+            dates[value.tracking_option_id] = date.fromisoformat(str(start)[:10])
+        except ValueError:
+            continue
+    for option in TrackingOption.objects.filter(organisation=organisation).exclude(pk__in=list(dates)):
+        m = CODE_DATE.match(option.name.strip())
+        if m:
+            try:
+                dates[option.pk] = date(2000 + int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except ValueError:
+                continue
+    return dates
+
+
+def _month_part(doc, account_id, period_end, lag_ok, events):
+    """(net for the month, net for later events, later event names, net with no event) of a bill's lines on the
+    account: a line for an event held by month end is the month's; a line for a later event isn't; a line with no
+    event is the month's if the bill came within the usual lag."""
+    ours = later = untagged = Decimal("0")
+    names = []
+    for line in doc.lines.all():
+        if line.account_id != account_id:
+            continue
+        net = line.line_amount - (line.tax_amount if doc.line_amount_type == "inclusive" else Decimal("0"))
+        held = [events[o.pk] for o in line.tracking.all() if o.pk in events]
+        if held and min(held) > period_end:
+            later += net
+            names += [o.name for o in line.tracking.all() if o.pk in events]
+        elif held:
+            ours += net
+        elif lag_ok:
+            untagged += net
+    return ours, later, sorted(set(names)), untagged
+
+
+def cut_off_bills(profile, period_end, used, events=None):
+    """(bills to accrue, bills to review, bills for later events): the bills that say what the month cost, on the
+    profile's account. A bill counts if its lines are for events held by month end (whenever it came, within the
+    bill window), or, for lines with no event, if it came within the cost's usual lag. One bill per supplier, the
+    first after month end (a second is usually next month's). Only suppliers this cost has been accrued from before
+    are taken; a bill from anyone else is listed for a person to judge. Each list is [(date, contact, document,
+    net)], oldest first; the net is the month's part."""
+    events = event_dates(profile.organisation) if events is None else events
+    lag_end = period_end + timedelta(days=cut_off_days(profile, period_end))
+    by_event = profile.behaviour == Behaviour.DRIVER  # its bills name the event; one that doesn't can't be placed
+    candidates = bills_for(profile.organisation, [profile.account_id], period_end + timedelta(days=1),
+                           period_end + timedelta(days=profile.accrual.bill_window_days), profile.supplier)
+    found, later, review = [], [], []
+    for bill_date, contact, doc, _ in candidates:
+        if doc.pk in used:
+            continue
+        ours, after, names, untagged = _month_part(doc, profile.account_id, period_end, bill_date <= lag_end, events)
+        if by_event and untagged > 0:
+            review.append((bill_date, contact, doc, untagged, "no event on the bill, so its month can't be told"))
+            untagged = Decimal("0")
+        if ours + untagged > 0:
+            found.append((bill_date, contact, doc, ours + untagged))
+        elif after > 0:
+            later.append((bill_date, contact, doc, after, names))
+    found.sort(key=lambda b: (b[0], b[2].pk))
+    known = {name.lower() for name in ((profile.amount_model or {}).get("suppliers") or {})}
+    if profile.supplier_id:
+        known.add(profile.supplier.name.lower())
+    take, seen = [], set()
+    for bill in found:
+        contact = bill[1]
+        who = contact.pk if contact else None
+        if who in seen:
+            continue
+        seen.add(who)
+        if contact is not None and contact.name.lower() in known:
+            take.append(bill)
+        else:
+            review.append((*bill, "not a supplier this cost was accrued from before"))
+    return take, review, later
 
 
 def _find_bill(line, used, window_days, tolerance):
@@ -152,7 +290,10 @@ def check_bills(journal, user=None):
             line.save()
             moved += 1
             continue
-        found = _find_bill(line, used, accrual.bill_window_days, tolerance)
+        # A bill still to come must arrive within the cost's usual lag; a posted line closes on any bill in the window.
+        window = (cut_off_days(line.profile, journal.period_end) if line.state == State.PREDICTED and line.profile
+                  else accrual.bill_window_days)
+        found = _find_bill(line, used, window, tolerance)
         if not found:
             continue
         _, bill_date, contact, doc, net = found

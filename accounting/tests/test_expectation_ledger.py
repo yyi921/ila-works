@@ -47,18 +47,19 @@ def test_run_saves_a_journal_of_expectations(learned, user):
     power = found["6100"]
     assert power.state == State.EVIDENCED and power.expected_amount == D("15450.00")
     assert power.evidence[0]["type"] == "bill" and power.confidence == 0.95
-    assert [h.get("to") for h in power.history] == [None, "evidenced"]
+    assert [h.get("to") for h in power.history] == ["evidenced"]  # the bill was in by the close: no estimate
     assert found["6600"].state == State.EVIDENCED
 
     software = found["6200"]
     assert software.state == State.PREDICTED and software.expected_amount == D("1200.00")
-    assert software.basis == "fixed amount" and software.history[0]["by"] == "erin"
+    assert software.basis == "the usual amount (Sep 2025 to Aug 2026)"  # not September's own accrual
+    assert software.history[0]["by"] == "erin"
     security = found["6300"]
     assert security.expected_amount == D("6000.00") and "3 events on sales invoices" in security.basis
 
     skipped = {s["profile"].split(" — ")[0]: s["why"] for s in journal.skipped}
-    assert skipped["Council Rates"] == "prepayment, not accrued"
-    assert skipped["Repair Kitchen Exhaust Fan"] == "no bill found after month end"
+    assert skipped["6400 Rates"] == "prepayment, not accrued"
+    assert skipped["6500 Repairs"] == "no bill found after month end"
     assert journal.state == State.PREDICTED  # the least advanced line
 
 
@@ -69,7 +70,7 @@ def test_run_respects_switches_and_materiality(learned, user):
     journal = run_accruals(learned.accrual, SEP, user)
     skipped = {s["profile"].split(" — ")[0]: s["why"] for s in journal.skipped}
     assert skipped["Sparkle Cleaners Pty Ltd"] == "switched off"
-    assert "below the $1,500 materiality floor" in skipped["Microsoft Subscription"]
+    assert "below the $1,500 materiality floor" in skipped["6200 Software"]
 
 
 def test_bill_dated_in_the_month_is_last_months_for_a_supplier_billing_in_arrears(learned, user):
@@ -195,4 +196,4 @@ def test_run_accruals_command(learned):
     text = out.getvalue()
     assert "Accruals September 2026: Predicted, 4 lines" in text
     assert "[Evidenced] Origin Energy Pty Ltd Sep 2026: 15,450.00" in text
-    assert "left out: Council Rates — 6400 Rates: prepayment, not accrued" in text
+    assert "left out: 6400 Rates: prepayment, not accrued" in text
