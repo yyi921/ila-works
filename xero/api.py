@@ -38,6 +38,7 @@ SCOPE_LABELS = {
     "accounting.reports.banksummary.read": "Bank Summary report",
     "accounting.reports.aged.read": "aged receivables and payables reports",
     "accounting.budgets.read": "budgets",
+    "accounting.attachments.read": "attachments (bill PDFs)",
 }
 
 
@@ -80,7 +81,11 @@ class XeroClient:
                 return rows
             page += 1
 
-    def _request(self, path, params, *, retried=False):
+    def get_file(self, path):
+        """A file from Xero (an attachment): (content bytes, content type). Never cached."""
+        return self._request(path, {}, raw=True)
+
+    def _request(self, path, params, *, retried=False, raw=False):
         try:
             token = oauth.get_access_token(self.connection)
         except oauth.XeroConnectionRevoked:
@@ -91,20 +96,20 @@ class XeroClient:
             resp = requests.get(
                 BASE_URL + path, params=params, timeout=TIMEOUT,
                 headers={"Authorization": f"Bearer {token}", "xero-tenant-id": str(self.connection.tenant_id),
-                         "Accept": "application/json"},
+                         "Accept": "*/*" if raw else "application/json"},
             )
         except requests.RequestException:
             logger.exception("Xero request to %s failed", path)
             raise XeroAPIError("Couldn't reach Xero. Try again in a minute.") from None
 
         if resp.status_code == 200:
-            return resp.json()
+            return (resp.content, resp.headers.get("Content-Type", "")) if raw else resp.json()
         if resp.status_code == 401 and not retried:
             # Could be an access token Xero has already invalidated: force one refresh, then retry. If the refresh
             # token is rejected, get_access_token marks the connection revoked.
             type(self.connection).objects.filter(pk=self.connection.pk).update(expires_at=datetime(2000, 1, 1, tzinfo=dt_timezone.utc))
             self.connection.refresh_from_db(fields=["expires_at"])
-            return self._request(path, params, retried=True)
+            return self._request(path, params, retried=True, raw=raw)
         if resp.status_code in (401, 403):
             raise XeroScopeMissing("Xero refused access to this data. Reconnect with /connect to re-authorise iLA.")
         if resp.status_code == 429:

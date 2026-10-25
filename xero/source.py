@@ -491,6 +491,20 @@ class XeroSource:
                     total -= amount / rate(credit)
         return {"total": total.quantize(Decimal("0.01")), "documents": count}
 
+    # --- Attachments ---
+
+    def bill_attachments(self, invoice_id):
+        """A bill's (or invoice's) attachments: [{"id", "name", "type", "size"}]."""
+        self.client.require_scope("accounting.attachments.read")
+        found = self.client.get(f"Invoices/{invoice_id}/Attachments", cache_seconds=0).get("Attachments", [])
+        return [{"id": a.get("AttachmentID"), "name": a.get("FileName", ""), "type": a.get("MimeType", ""),
+                 "size": int(a.get("ContentLength") or 0)} for a in found]
+
+    def bill_attachment(self, invoice_id, attachment_id):
+        """One attachment's content: (bytes, content type)."""
+        self.client.require_scope("accounting.attachments.read")
+        return self.client.get_file(f"Invoices/{invoice_id}/Attachments/{attachment_id}")
+
     def _invoices_by_id(self, ids):
         found = {}
         ids = sorted(ids)

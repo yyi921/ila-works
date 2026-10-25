@@ -265,6 +265,18 @@ class State(models.TextChoices):
 STATE_ORDER = [State.PREDICTED, State.EVIDENCED, State.POSTED, State.CLOSED]
 
 
+class Decision(models.TextChoices):
+    """A person's decision on a proposed line. Undecided lines are proposals: they aren't posted, and a re-run may
+    replace them; decided lines are kept."""
+
+    ACCEPTED = "accepted", "Accepted"
+    ADJUSTED = "adjusted", "Adjusted"
+    REJECTED = "rejected", "Rejected"
+
+
+TO_POST = (Decision.ACCEPTED, Decision.ADJUSTED)
+
+
 class LedgerJournal(TenantModel):
     """One run's journal in the Expectation Ledger, e.g. TECC accruals for September 2026. Its state is the least
     advanced of its lines' states."""
@@ -297,7 +309,7 @@ class LedgerJournal(TenantModel):
         return self.narration or f"{self.get_kind_display()}s {self.period_end:%b %Y}"
 
     def refresh_state(self):
-        states = [line.state for line in self.lines.all()]
+        states = [line.state for line in self.lines.exclude(decision=Decision.REJECTED)]
         state = min(states, key=STATE_ORDER.index) if states else State.PREDICTED
         if state != self.state:
             self.state = state
@@ -330,6 +342,14 @@ class Expectation(TenantModel):
     actual_amount = models.DecimalField(null=True, blank=True, **MONEY)
     variance = models.DecimalField(null=True, blank=True, help_text="Actual − expected.", **MONEY)
     is_manual = models.BooleanField(default=False, help_text="Added or changed by a person; a re-run keeps it.")
+    decision = models.CharField(max_length=20, choices=Decision.choices, blank=True,
+                                help_text="Blank: a proposal. Only accepted and adjusted lines go into the journal file.")
+    decision_reason = models.CharField(max_length=255, blank=True)
+    proposed_amount = models.DecimalField(null=True, blank=True, help_text="What iLA proposed, kept when adjusted.",
+                                          **MONEY)
+    decided_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                   related_name="+")
+    decided_at = models.DateTimeField(null=True, blank=True)
 
     class Meta(TenantModel.Meta):
         ordering = ["pk"]
@@ -345,11 +365,56 @@ class Expectation(TenantModel):
                                         "by": who() if who else str(by), "why": why,
                                         **{k: str(v) for k, v in changes.items()}}]
 
+    def decide(self, decision, user, reason="", amount=None):
+        """Accept, adjust (to ``amount``) or reject the line, with the reason, recorded in its history."""
+        if decision == Decision.ADJUSTED:
+            if amount is None:
+                raise ValueError("An adjustment needs the amount.")
+            if self.proposed_amount is None:
+                self.proposed_amount = self.expected_amount
+            changes = {"amount_before": self.expected_amount, "amount": amount}
+            self.expected_amount = amount
+        else:
+            changes = {}
+        self.decision, self.decision_reason = decision, (reason or "")[:255]
+        self.decided_by, self.decided_at = user, timezone.now()
+        self.log(user, f"{Decision(decision).label}" + (f": {reason}" if reason else ""), **changes)
+
+    def undecide(self, user):
+        if self.proposed_amount is not None:
+            self.expected_amount, self.proposed_amount = self.proposed_amount, None
+        self.decision, self.decision_reason, self.decided_by, self.decided_at = "", "", None, None
+        self.log(user, "Decision undone: back to a proposal")
+
     def move(self, state, by, why, **changes):
         if state != self.state:
             changes = {"from": self.state, "to": state, **changes}
             self.state = state
         self.log(by, why, **changes)
+
+
+class BillReading(TenantModel):
+    """What was read from one attachment of a bill (its PDF): the service period, the events and dated lines, each
+    with the words and page they came from. Read once per file (by its SHA-256); the file itself isn't kept. Code,
+    not the model, decides from these facts which month the bill belongs to."""
+
+    document = models.ForeignKey("core.Document", on_delete=models.CASCADE, related_name="readings")
+    file_name = models.CharField(max_length=255)
+    sha256 = models.CharField(max_length=64)
+    content_type = models.CharField(max_length=100, blank=True)
+    facts = models.JSONField(default=dict, blank=True)
+    model = models.CharField(max_length=100, blank=True)
+    error = models.TextField(blank=True, help_text="Why it couldn't be read, if it couldn't.")
+    read_at = models.DateTimeField(default=timezone.now)
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.UniqueConstraint(fields=["document", "sha256"], name="accounting_billreading_file_uniq")]
+        ordering = ["-read_at"]
+        verbose_name = "bill reading"
+
+    def __str__(self):
+        return f"{self.document} · {self.file_name}"
 
 
 class Prepayment(TenantModel):

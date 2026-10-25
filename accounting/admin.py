@@ -10,7 +10,8 @@ from django.utils.safestring import mark_safe
 from . import jobs
 from .balance import compare, open_accruals
 from .ledger import LedgerError, build_import_file, check_bills, mark_posted, run_accruals
-from .models import (BEHAVIOUR_GUIDE, Accrual, AccrualProfile, Behaviour, Cogs, Expectation, LedgerJournal,
+from .models import (BEHAVIOUR_GUIDE, Accrual, AccrualProfile, Behaviour, BillReading, Cogs, Decision, Expectation,
+                     LedgerJournal,
                      Prepayment, State)
 from .util import month_end, month_start
 
@@ -320,11 +321,19 @@ class ExpectationInline(SameOrganisation, admin.TabularInline):
     model = Expectation
     parent_model_for_org = LedgerJournal
     form = ExpectationForm
-    fields = ("description", "account", "expected_amount", "reverse_next_month", "state", "why", "basis_text",
-              "evidence_text", "actual_amount", "variance", "history_text")
-    readonly_fields = ("basis_text", "evidence_text", "actual_amount", "variance", "history_text")
+    fields = ("description", "account", "expected_amount", "reverse_next_month", "state", "decision_text", "why",
+              "basis_text", "evidence_text", "actual_amount", "variance", "history_text")
+    readonly_fields = ("decision_text", "basis_text", "evidence_text", "actual_amount", "variance", "history_text")
     extra = 0
     show_change_link = True
+
+    @admin.display(description="Decision")
+    def decision_text(self, obj):
+        if not obj.decision:
+            return "Proposed"
+        who = obj.decided_by.get_username() if obj.decided_by else ""
+        return _wrap(f"{obj.get_decision_display()} by {who}" + (f": {obj.decision_reason}" if obj.decision_reason
+                                                                 else ""), "10em")
 
     @admin.display(description="Basis")
     def basis_text(self, obj):
@@ -365,7 +374,7 @@ class LedgerJournalAdmin(SameOrganisation, admin.ModelAdmin):
                     "actual_total", "created_by", "file_link", "posted_by")
     list_filter = ("organisation", "accrual", "state", "period_end")
     form = LedgerJournalForm
-    actions = ["rerun", "find_bills", "build_file", "posted"]
+    actions = ["rerun", "accept_all", "find_bills", "build_file", "posted"]
     inlines = [ExpectationInline]
     readonly_fields = ("organisation", "state", "skipped_table", "file_link", "created_by", "posted_by", "posted_at",
                        "lifecycle", "compare_table", "open_table")
@@ -527,6 +536,18 @@ class LedgerJournalAdmin(SameOrganisation, admin.ModelAdmin):
         self._each(request, queryset, lambda j: mark_posted(j, request.user),
                    lambda j, r: f"posted; lines now {j.get_state_display().lower()}.")
 
+    @admin.action(description="Accept every proposed line (lines already decided are left alone)")
+    def accept_all(self, request, queryset):
+        def accept(journal):
+            lines = list(journal.lines.filter(decision=""))
+            for line in lines:
+                line.decide(Decision.ACCEPTED, request.user, "accepted all in admin")
+                line.save()
+            journal.refresh_state()
+            return len(lines)
+
+        self._each(request, queryset, accept, lambda j, n: f"{n} line(s) accepted.")
+
 
 @admin.register(Expectation)
 class ExpectationAdmin(SameOrganisation, admin.ModelAdmin):
@@ -575,3 +596,22 @@ class CogsAdmin(admin.ModelAdmin):
 
     list_display = ("organisation", "account_codes")
     exclude = SOURCE_FIELDS
+
+
+@admin.register(BillReading)
+class BillReadingAdmin(admin.ModelAdmin):
+    """What was read from each bill's PDF (only the facts the bill states, with its words and page). Read-only: the
+    file itself isn't kept, only its SHA-256."""
+
+    list_display = ("document", "file_name", "read_at", "model", "error", "organisation")
+    list_filter = ("organisation",)
+    search_fields = ("document__number", "document__contact__name", "file_name")
+    readonly_fields = ("organisation", "document", "file_name", "sha256", "content_type", "facts", "model", "error",
+                       "read_at")
+    exclude = ("source_system", "source_id", "source_updated_at", "source_hash")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

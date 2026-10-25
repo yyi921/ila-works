@@ -31,6 +31,10 @@ HOW_TO = {
                  "/reconcile --Sep 2026 << schedules.csv; the accrual account (e.g. 2000) "
                  "takes the Expectation Ledger's posted accruals. Methods and materiality are set per account in Admin > "
                  "Chart of accounts. /reconcile --bank shows today's unreconciled Xero items.",
+    "accrue": "Month-end accruals: /accrue --Sep 2026 shows what iLA proposes (bills after month end first, placed by "
+              "their PDFs when read; else estimates from earlier months), with the evidence. Accept, adjust or reject "
+              "each with a reason (accept 1-5, adjust 3 1,200 <reason>, reject 4 <reason>, why 3), then build the "
+              "journal file to stamp and import. read reads the bill PDFs first.",
     "inv": "Open one invoice, bill or credit note by its number, with lines, payments and amount due.",
     "find": "Search contacts and invoice or bill numbers and references, e.g. /find smith.",
     "dim": "See what you can tag by before tagging: Xero's tracking categories (Xero allows 2 active and 4 in all) "

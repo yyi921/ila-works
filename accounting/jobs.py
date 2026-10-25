@@ -90,3 +90,35 @@ def copy_and_scan(accrual, *, copy, user=None):
 
     start(work)
     return True
+
+
+def read_bills(accrual, period_end, *, user=None):
+    """Start the job: read the PDFs of the bills that came after ``period_end`` (up to today, within the bill window)
+    on accrued accounts. Returns False if a job is already running."""
+    if not claim(accrual, "Reading bill PDFs…"):
+        return False
+    accrual_id, user_id = accrual.pk, getattr(user, "pk", None)
+
+    def work():
+        from xero.source import source_for
+
+        from .reading import read_bills as read
+
+        try:
+            row = Accrual.objects.select_related("organisation").get(pk=accrual_id)
+            until = min(timezone.localdate(), period_end + timedelta(days=row.bill_window_days))
+            done, failed = read(row, period_end, until, source_for(row.organisation),
+                                progress=lambda text: _progress(accrual_id, text))
+            message = (f"{done} bill(s) after {period_end:%d %b %Y} read" + (f", {failed} couldn't be read" if failed
+                                                                              else "") + ".")
+            _finish(accrual_id, DONE, message)
+            AuditLog.objects.create(organisation=row.organisation, user_id=user_id, action=AuditLog.Action.SYNC,
+                                    input=f"accruals: read bill PDFs after {period_end:%Y-%m-%d}",
+                                    target_type="accounting.accrual", target_id=str(accrual_id),
+                                    result={"read": done, "failed": failed})
+        except Exception as exc:  # recorded on the accrual for the admin to see
+            logger.exception("Reading bills for accrual %s failed", accrual_id)
+            _finish(accrual_id, FAILED, f"Failed: {exc}")
+
+    start(work)
+    return True

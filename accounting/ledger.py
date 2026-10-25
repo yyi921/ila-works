@@ -25,7 +25,7 @@ from django.utils import timezone
 
 from core.models import AuditLog, DimensionValue, Document, DocumentLine, ImportFile, SourceSystem
 
-from .models import Behaviour, Expectation, LedgerJournal, Method, State
+from .models import TO_POST, Behaviour, Decision, Expectation, LedgerJournal, Method, State
 from .rules import expected
 from .scan import bills_for
 from .util import add_months, money, month_end, month_start
@@ -68,7 +68,7 @@ def run_accruals(accrual, period_end, user=None, journal=None):
     journal.created_by = journal.created_by or user
     journal.narration = journal.narration or f"Accruals {period_end:%B %Y}"
     journal.save()
-    journal.lines.filter(is_manual=False, profile__isnull=False).delete()
+    journal.lines.filter(is_manual=False, profile__isnull=False, decision="").delete()  # decided lines are kept
     kept = set(journal.lines.values_list("profile_id", flat=True))
 
     skipped = []
@@ -77,6 +77,12 @@ def run_accruals(accrual, period_end, user=None, journal=None):
     profiles = sorted(accrual.profiles.select_related("account", "supplier", "accrual").prefetch_related("tracking"),
                       key=lambda p: (p.supplier_id is None, p.pk))
     events = event_dates(accrual.organisation)
+    from .reading import placements
+
+    pdf = placements(Document.objects.filter(organisation=accrual.organisation, type=Document.Type.BILL,
+                                             date__gt=period_end,
+                                             date__lte=period_end + timedelta(days=accrual.bill_window_days)),
+                     period_end)
     for profile in profiles:
         why = None
         amount, basis, bills = None, "", []
@@ -90,22 +96,23 @@ def run_accruals(accrual, period_end, user=None, journal=None):
             why = f"bill {bill[2]} dated {bill[0]:%d %b} already posted"
         else:  # a bill after month end is evidence first; "already billed" only stops an estimate
             if profile.method not in (Method.PREPAYMENT, Method.NONE):
-                bills, review, later = cut_off_bills(profile, period_end, used, events)
-                for bill_date, contact, doc, net, names in later:
+                bills, review, later = cut_off_bills(profile, period_end, used, events, pdf)
+                for bill_date, contact, doc, net, reason in later:
                     skipped.append({"profile": profile.name, "profile_id": profile.pk,
                                     "why": f"bill {doc.number or 'without a number'} from "
                                            f"{contact.name if contact else 'no supplier'} dated {bill_date:%d %b}, "
-                                           f"{money(net)}: for {', '.join(names[:3])}, held after month end"})
+                                           f"{money(net)}: {reason}"})
                 for bill_date, contact, doc, net, reason in review:
                     skipped.append({"profile": profile.name, "profile_id": profile.pk, "review": True,
                                     "why": f"to review: bill {doc.number or 'without a number'} from "
                                            f"{contact.name if contact else 'no supplier'} dated {bill_date:%d %b}, "
                                            f"{money(net)}: {reason}; add it by hand if it's for this month"})
             if bills:
-                amount = sum((net for _, _, _, net in bills), Decimal("0"))
+                amount = sum((b[3] for b in bills), Decimal("0"))
                 basis = ("bill " if len(bills) == 1 else "bills ") + ", ".join(
                     f"{doc.number or 'without a number'} ({contact.name if contact else 'no supplier'}, "
-                    f"{bill_date:%d %b})" for bill_date, contact, doc, _ in bills)
+                    f"{bill_date:%d %b}" + (", per its PDF" if how.get("placed_by") == "PDF" else "") + ")"
+                    for bill_date, contact, doc, _, how in bills)
             elif profile.skip_if_bill_posted and (bill := _bill_already_posted(profile, start, period_end)):
                 why = f"bill {bill[2]} dated {bill[0]:%d %b} already posted"
             else:
@@ -123,11 +130,11 @@ def run_accruals(accrual, period_end, user=None, journal=None):
                            expected_amount=amount or Decimal("0"), basis=basis[:255],
                            reverse_next_month=profile.reverse_next_month, confidence=profile.confidence)
         if bills:
-            for bill_date, contact, doc, net in bills:
+            for bill_date, contact, doc, net, how in bills:
                 used.add(doc.pk)
                 line.evidence = line.evidence + [{
                     "type": "bill", "document_id": doc.pk, "number": doc.number, "date": bill_date.isoformat(),
-                    "supplier": contact.name if contact else "", "amount": str(net)}]
+                    "supplier": contact.name if contact else "", "amount": str(net), **how}]
             line.supplier = line.supplier or (bills[0][1] if len({b[1] for b in bills}) == 1 else None)
             line.confidence = 0.95 if profile.supplier_id else 0.8
             line.move(State.EVIDENCED, user or RUN, f"In by the close: {basis}", amount=line.expected_amount)
@@ -208,14 +215,23 @@ def _month_part(doc, account_id, period_end, lag_ok, events):
     return ours, later, sorted(set(names)), untagged
 
 
-def cut_off_bills(profile, period_end, used, events=None):
-    """(bills to accrue, bills to review, bills for later events): the bills that say what the month cost, on the
-    profile's account. A bill counts if its lines are for events held by month end (whenever it came, within the
-    bill window), or, for lines with no event, if it came within the cost's usual lag. One bill per supplier, the
-    first after month end (a second is usually next month's). Only suppliers this cost has been accrued from before
-    are taken; a bill from anyone else is listed for a person to judge. Each list is [(date, contact, document,
-    net)], oldest first; the net is the month's part."""
+def _account_net(doc, account_id):
+    return sum((line.line_amount - (line.tax_amount if doc.line_amount_type == "inclusive" else Decimal("0"))
+                for line in doc.lines.all() if line.account_id == account_id), Decimal("0"))
+
+
+def cut_off_bills(profile, period_end, used, events=None, pdf=None):
+    """(bills to accrue, bills to review, bills not for the month): the bills that say what the month cost, on the
+    profile's account, within the bill window after month end. Where the bill's PDF has been read, it decides
+    (see reading.py). Otherwise a line for an event held by month end is the month's whenever it came, and a line
+    with no event is the month's if the bill came within the cost's usual lag. One bill per supplier, the first
+    after month end (a second is usually next month's). Only suppliers this cost has been accrued from before are
+    taken; a bill from anyone else is listed for a person to judge.
+
+    To accrue: [(date, contact, document, net for the month, how placed)], oldest first. To review and not for the
+    month: [(date, contact, document, net, reason)]."""
     events = event_dates(profile.organisation) if events is None else events
+    pdf = pdf or {}
     lag_end = period_end + timedelta(days=cut_off_days(profile, period_end))
     by_event = profile.behaviour == Behaviour.DRIVER  # its bills name the event; one that doesn't can't be placed
     candidates = bills_for(profile.organisation, [profile.account_id], period_end + timedelta(days=1),
@@ -224,14 +240,29 @@ def cut_off_bills(profile, period_end, used, events=None):
     for bill_date, contact, doc, _ in candidates:
         if doc.pk in used:
             continue
+        place = pdf.get(doc.pk)
+        if place is not None and place.kind in ("month", "spans", "later"):
+            net = _account_net(doc, profile.account_id)
+            how = {"placed_by": "PDF", "reason": place.reason, "quote": place.quote[:300], "page": place.page,
+                   "file": place.file}
+            if place.kind == "later":
+                later.append((bill_date, contact, doc, net, f"the PDF says {place.reason} ({place.file})"))
+            elif net > 0:
+                part = net if place.kind == "month" else (net * place.share).quantize(Decimal("0.01"))
+                found.append((bill_date, contact, doc, part, how))
+            continue
         ours, after, names, untagged = _month_part(doc, profile.account_id, period_end, bill_date <= lag_end, events)
         if by_event and untagged > 0:
-            review.append((bill_date, contact, doc, untagged, "no event on the bill, so its month can't be told"))
+            review.append((bill_date, contact, doc, untagged, "no event on the bill, so its month can't be told"
+                                                              + (" (read its PDF with /accrue read)" if place is None
+                                                                 else "; the PDF doesn't say either")))
             untagged = Decimal("0")
         if ours + untagged > 0:
-            found.append((bill_date, contact, doc, ours + untagged))
+            how = {"placed_by": "event date" if not untagged else "billing lag" if not ours
+                   else "event date and billing lag"}
+            found.append((bill_date, contact, doc, ours + untagged, how))
         elif after > 0:
-            later.append((bill_date, contact, doc, after, names))
+            later.append((bill_date, contact, doc, after, f"for {', '.join(names[:3])}, held after month end"))
     found.sort(key=lambda b: (b[0], b[2].pk))
     known = {name.lower() for name in ((profile.amount_model or {}).get("suppliers") or {})}
     if profile.supplier_id:
@@ -246,7 +277,10 @@ def cut_off_bills(profile, period_end, used, events=None):
         if contact is not None and contact.name.lower() in known:
             take.append(bill)
         else:
-            review.append((*bill, "not a supplier this cost was accrued from before"))
+            why = "not a supplier this cost was accrued from before"
+            if bill[4].get("placed_by") == "PDF":
+                why += f"; the PDF says {bill[4]['reason']}"
+            review.append((*bill[:4], why))
     return take, review, later
 
 
@@ -276,6 +310,14 @@ def check_bills(journal, user=None):
     tolerance = Decimal(accrual.bill_tolerance) / 100
     lines = list(journal.lines.select_related("profile", "account", "supplier"))
     used = {e.get("document_id") for line in lines for e in line.evidence if e.get("document_id")}
+    from .reading import placements
+
+    # A bill whose PDF says it is for a later period is never this month's.
+    used |= {pk for pk, place in placements(
+        Document.objects.filter(organisation=journal.organisation, type=Document.Type.BILL,
+                                date__gt=journal.period_end,
+                                date__lte=journal.period_end + timedelta(days=accrual.bill_window_days)),
+        journal.period_end).items() if place.kind == "later"}
     moved = 0
     for line in lines:
         if line.state not in (State.PREDICTED, State.POSTED):
@@ -338,10 +380,10 @@ def import_rows(journal):
     credit = accrual.codes[0]
     rows, fmt = [], accrual.date_format
     reversal_day = add_months(journal.period_end, 1)
-    lines = list(journal.lines.filter(state__in=(State.PREDICTED, State.EVIDENCED, State.POSTED))
+    lines = list(journal.lines.filter(state__in=(State.PREDICTED, State.EVIDENCED, State.POSTED), decision__in=TO_POST)
                  .select_related("account").prefetch_related("tracking__category"))
     if not lines:
-        raise LedgerError("There are no lines to post.")
+        raise LedgerError("No line is accepted yet: accept (or adjust) the lines to post first.")
     for narration, day, sign, chosen in (
             (journal.narration or str(journal), journal.period_end, 1, lines),
             (f"Reversal: {journal.narration or journal}", reversal_day, -1,
@@ -386,7 +428,7 @@ def mark_posted(journal, user):
     if journal.import_file is None:
         raise LedgerError("Build and stamp the import file first.")
     now = timezone.now()
-    for line in journal.lines.filter(state__in=(State.PREDICTED, State.EVIDENCED)):
+    for line in journal.lines.filter(state__in=(State.PREDICTED, State.EVIDENCED), decision__in=TO_POST):
         line.move(State.POSTED, user, f"Posted with {journal.import_file.file_name}")
         line.save()
     journal.posted_by, journal.posted_at = user, now
