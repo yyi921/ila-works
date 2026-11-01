@@ -929,3 +929,45 @@ def flags(ledger, item, balance, as_at, *, aged_months=3, residual=Decimal("10")
 
 def stable_id(*parts):
     return hashlib.sha256("|".join(str(p) for p in parts).encode()).hexdigest()[:16]
+
+
+# --- The reconciliation, for the console and admin ---------------------------------------------------------------
+
+def shown(account, amount):
+    """A debit-positive amount the way the balance sheet shows the account (a liability's credit as positive)."""
+    return None if amount is None else amount * natural_sign(account)
+
+
+def month_ends_between(first, last):
+    ends, day = [], month_end(first)
+    while day <= last:
+        ends.append(day)
+        day = month_end(day + timedelta(days=1))
+    return ends
+
+
+def report(ledger, period_end):
+    """The reconciliation at ``period_end``, amounts as the balance sheet shows them: the roll-forward by month
+    against Xero, the month by category, the open descriptions and the totals."""
+    account = ledger.account
+    months = []
+    for row in roll_forward(ledger, month_ends_between(ledger.start, period_end)):
+        xero = ledger.balances.get(row["end"].isoformat())
+        xero = Decimal(xero) if xero is not None else None
+        months.append({"end": row["end"], "opening": shown(account, row["opening"]),
+                       "added": shown(account, row[Movement.ADDITION]),
+                       "reversed": shown(account, row[Movement.REVERSAL]),
+                       "paid": shown(account, row[Movement.PAYMENT] + row[Movement.ADJUSTMENT]),
+                       "closing": shown(account, row["closing"]), "xero": shown(account, xero),
+                       "difference": shown(account, xero - row["closing"]) if xero is not None else None})
+    categories = [{"name": r["name"], "opening": shown(account, r["opening"]), "added": shown(account, r["added"]),
+                   "released": shown(account, r["released"]), "closing": shown(account, r["closing"]),
+                   "items": r["items"]} for r in by_category(ledger, period_end)]
+    items = [{"item": item, "balance": shown(account, bal), "flags": flags(ledger, item, bal, period_end)}
+             for item, bal in open_at(ledger, period_end)]
+    total = sum((i["balance"] for i in items), ZERO)
+    xero = ledger.balances.get(period_end.isoformat())
+    proposed = OpenItemPosting.objects.filter(ledger=ledger, confidence=Confidence.PROPOSED,
+                                              date__lte=period_end).count()
+    return {"months": months, "categories": categories, "items": items, "total": total,
+            "xero": shown(account, Decimal(xero)) if xero is not None else None, "proposed": proposed}

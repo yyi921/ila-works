@@ -1,11 +1,15 @@
 """Admin for open-item reconciliation: ledgers (with their categories), descriptions and the transaction register.
 Categories and descriptions can be changed here as well as from the console; a rebuild keeps the changes."""
 
+from datetime import date
+
 from django.contrib import admin, messages
+from django.db.models import Sum
 from django.urls import reverse
 from django.utils.html import format_html
 
 from .models import OpenItem, OpenItemCategory, OpenItemLedger, OpenItemPosting
+from .openitems import month_ends_between, natural_sign, report
 
 SOURCE_FIELDS = ("source_system", "source_id", "source_updated_at", "source_hash")
 EDITABLE = ("category", "description", "counterparty", "reference", "service_period")
@@ -36,6 +40,26 @@ class OpenItemLedgerAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        """The page opens with the reconciliation at a month end (?at=YYYY-MM-DD; default the last one built)."""
+        extra = dict(extra_context or {})
+        ledger = OpenItemLedger.objects.filter(pk=object_id).select_related("account").first()
+        if ledger is not None and ledger.built_to:
+            days = month_ends_between(ledger.start, ledger.built_to)
+            try:
+                at = date.fromisoformat(request.GET.get("at", ""))
+            except ValueError:
+                at = None
+            at = at if at in days else (days[-1] if days else None)
+            if at is not None:
+                data = report(ledger, at)
+                extra.update(recon=data, recon_at=at, recon_days=days,
+                             recon_difference=(data["xero"] - data["total"]) if data["xero"] is not None else None)
+        elif ledger is not None:
+            extra["recon_message"] = ("Not built yet" + (f": {ledger.job_message}" if ledger.job_message else ".")
+                                      + " Run /reconcile in the console, or use the Rebuild action.")
+        return super().change_view(request, object_id, form_url, extra)
 
     def save_formset(self, request, form, formset, change):
         for row in formset.save(commit=False):
@@ -101,7 +125,7 @@ class OpenItemAdmin(admin.ModelAdmin):
     service period and note can be changed; a rebuild keeps those changes."""
 
     list_display = ("code", "category", "description", "counterparty", "reference", "raised_on", "original_amount",
-                    "origin", "is_active", "ledger")
+                    "balance", "origin", "is_active", "ledger")
     list_editable = ("category", "description", "counterparty", "reference")
     list_filter = ("ledger__account", "origin", "category", "is_active")
     search_fields = ("code", "description", "counterparty", "reference")
@@ -112,6 +136,16 @@ class OpenItemAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("ledger__account").annotate(
+            balance_now=Sum("postings__amount"))
+
+    @admin.display(description="Balance (as the balance sheet shows it)", ordering="balance_now")
+    def balance(self, obj):
+        if obj.balance_now is None:
+            return "-"
+        return f"{obj.balance_now * natural_sign(obj.ledger.account):,.2f}"
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "category":

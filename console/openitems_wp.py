@@ -20,7 +20,7 @@ from accounting import openitem_jobs
 from accounting.models import (CategoryBehaviour, OpenItem, OpenItemCategory, OpenItemDecision, OpenItemLedger,
                                OpenItemPosting)
 from accounting.openitem_files import FileProblem, read_gl, read_seed
-from accounting.openitems import UNASSIGNED, balances_at, by_category, flags, natural_sign, open_at, roll_forward
+from accounting.openitems import UNASSIGNED, balances_at, natural_sign, report, roll_forward
 from core.models import AuditLog, ReconMethod
 
 from .output import DATE, MONEY, NUMBER, Column, Note, Table
@@ -33,7 +33,7 @@ HELP = ("Type: items (or items all, items UTL) · why D2000-1005 · move <txn> D
         "all) · proposed · months · categories · category UTL name|words|accounts|behaviour|standing|scope <value> · "
         "category C11 merge LIC · category add UTL Utilities · "
         "item D2000-1005 description|category|counterparty|reference|note <value> · "
-        "rebuild · refresh (read Xero again) · prepared · reviewed · done.")
+        "rebuild · refresh (show the latest) · reread (read Xero again) · prepared · reviewed · done.")
 BEHAVIOURS = {c.value: c for c in CategoryBehaviour} | {c.label.split(" (")[0].lower(): c for c in CategoryBehaviour}
 ITEM_FIELDS = {"description": "description", "text": "description", "category": "category", "cat": "category",
                "counterparty": "counterparty", "supplier": "counterparty", "reference": "reference", "ref": "reference",
@@ -67,7 +67,7 @@ def _use_open_items(account):
 def _start_build(ctx, ledger, to, *, copy=True):
     started = openitem_jobs.run(ledger, to, source_factory=lambda org: ctx.source, copy=copy)
     if not started:
-        return "A build is already running for this account; type refresh in a minute."
+        return "A build is already running for this account; type refresh in a minute to see it."
     ledger.refresh_from_db()
     if ledger.job_status == openitem_jobs.RUNNING:
         return "Building in the background (reading Xero can take a minute or two). Type refresh to see it."
@@ -175,12 +175,13 @@ def support(rec):
 
 
 def blocks(result, rec):
-    """The open-item parts of the working paper."""
+    """The open-item parts of the working paper: the roll-forward, the month by category and the open
+    descriptions."""
     account, ledger = rec.account, ledger_for(rec.account)
     if ledger is None:
         return
     if ledger.job_status == openitem_jobs.RUNNING:
-        result.add(Note(f"Building: {ledger.job_message} Type refresh to see it when it's done.", "warning"))
+        result.add(Note(f"Building: {ledger.job_message} Type refresh in a minute to see it.", "warning"))
         return
     if ledger.job_status == openitem_jobs.FAILED:
         result.add(Note(f"The last build failed: {ledger.job_message} Type refresh to try again.", "warning"))
@@ -192,29 +193,34 @@ def blocks(result, rec):
     source = f"the GL {ledger.gl_source.get('file', '')}" if ledger.gl_rows else "iLA's copy of Xero"
     result.add(Note(f"Starts at {fmt(ledger.opening_date)} from {seed}; postings from {source} up to "
                     f"{fmt(ledger.built_to)}." + (f" {ledger.job_message}" if ledger.job_message else "")))
+    data = report(ledger, rec.period_end)
+    table = result.add(Table([Column("Month end", DATE), Column("Opening", MONEY), Column("Added", MONEY),
+                              Column("Reversed", MONEY), Column("Billed / other", MONEY), Column("Closing", MONEY),
+                              Column("Xero", MONEY), Column("Difference", MONEY)],
+                             title="Roll-forward: opening + movements = closing, against Xero"))
+    for m in data["months"]:
+        table.add(m["end"], m["opening"], m["added"], m["reversed"], m["paid"], m["closing"], m["xero"],
+                  m["difference"])
     table = result.add(Table([Column("Category"), Column("Opening", MONEY), Column("Added", MONEY),
                               Column("Released", MONEY), Column("Closing", MONEY), Column("Open", NUMBER)],
                              title=f"By category, {rec.period_end:%B %Y}"))
     totals = [ZERO] * 4
-    for row in by_category(ledger, rec.period_end):
-        values = [display(account, row[k]) for k in ("opening", "added", "released", "closing")]
+    for row in data["categories"]:
+        values = [row[k] for k in ("opening", "added", "released", "closing")]
         totals = [a + b for a, b in zip(totals, values)]
         table.add(row["name"], *values, row["items"])
     table.add("Total", *totals, None, total=True)
-    items = open_at(ledger, rec.period_end)
     table = result.add(Table([Column("Code"), Column("Category"), Column("Description"), Column("Reference"),
                               Column("Raised", DATE), Column("Balance", MONEY), Column("Flags")],
                              title=f"Open descriptions at {fmt(rec.period_end)}"))
-    for item, bal in items:
+    for row in data["items"]:
+        item = row["item"]
         table.add(item.code, item.category.code if item.category else UNASSIGNED, item.description,
-                  item.reference, item.raised_on, display(account, bal),
-                  " ".join(flags(ledger, item, bal, rec.period_end)))
-    table.add("", "", "Total", "", None, display(account, sum((b for _, b in items), ZERO)), "", total=True)
-    proposed = OpenItemPosting.objects.filter(ledger=ledger, confidence=OpenItemPosting.Confidence.PROPOSED,
-                                              date__lte=rec.period_end).count()
-    if proposed:
-        result.add(Note(f"{proposed} link(s) were proposed rather than certain: type proposed to check them, then "
-                        "confirm or move them.", "warning"))
+                  item.reference, item.raised_on, row["balance"], " ".join(row["flags"]))
+    table.add("", "", "Total", "", None, data["total"], "", total=True)
+    if data["proposed"]:
+        result.add(Note(f"{data['proposed']} link(s) were proposed rather than certain: type proposed to check them, "
+                        "then confirm or move them.", "warning"))
 
 
 def _ledger(rec):
@@ -268,7 +274,13 @@ def answer(ctx, rec, word, rest, raw_rest):
     if word == "rebuild":
         message = _start_build(ctx, ledger, max(rec.period_end, ledger.built_to or rec.period_end), copy=False)
         return None, message or "Rebuilt from iLA's copy, with your decisions and edits applied."
-    if word == "refresh":
+    if word in ("refresh", "show"):
+        if ledger.job_status == openitem_jobs.RUNNING:
+            return None, "Still building; type refresh again in a minute."
+        if ledger.built_to is None or ledger.built_to < rec.period_end:
+            return None, _start_build(ctx, ledger, rec.period_end, copy=True) or "Built."
+        return None, ""
+    if word == "reread":
         message = _start_build(ctx, ledger, max(rec.period_end, ledger.built_to or rec.period_end), copy=True)
         return None, message or "Read Xero again and rebuilt."
     return None, None
