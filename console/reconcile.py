@@ -41,13 +41,13 @@ from xero.api import XeroAPIError
 from .models import ReconSession
 from .output import DATE, MONEY, NUMBER, TEXT, Column, Figure, Figures, Note, Result, Table
 from .periods import fmt, parse_date
-from .registry import CommandError, read_params
+from .registry import CommandError, as_at_date, positive_int, read_params
 
 ZERO = Decimal("0")
 CENT = Decimal("0.01")
 CLOSE_WORDS = {"cancel", "/cancel", "stop", "quit", "done", "close", "exit"}
 SUPPORT_LABEL = {ReconMethod.BANK: "Statement balance", ReconMethod.SUBLEDGER: "Ledger balance",
-                 ReconMethod.NIL: "Should be"}
+                 ReconMethod.NIL: "Should be", ReconMethod.OPEN_ITEMS: "Open descriptions"}
 AUTO_SUPPORT = {ReconMethod.NIL, ReconMethod.SUBLEDGER}
 # Pack statuses, in the order the pack lists them (work to do first).
 DIFFERENCE, NO_SUPPORT, NOT_STARTED, NOT_SET, READY, PREPARED, REVIEWED, NIL_OK, BELOW = (
@@ -114,6 +114,16 @@ def answer(ctx, session, text, files=()):
     intro = _refresh(ctx, rec, balance)
     word, _, rest = low.partition(" ")
     raw_rest = (text or "").strip()[len(word):].strip()
+    if rec.method == ReconMethod.OPEN_ITEMS and not files:
+        from . import openitems_wp
+
+        shown, message = openitems_wp.answer(ctx, rec, word, rest, raw_rest)
+        if shown is not None:
+            return shown
+        if message is not None:
+            rec.refresh_from_db()
+            refreshed = _refresh(ctx, rec, balance)
+            return show(ctx, rec, balance, intro=" ".join(p for p in (message, refreshed) if p))
     if files:
         if len(files) > 1:
             raise CommandError("Choose one schedule file.")
@@ -164,7 +174,8 @@ def start(ctx, cmd):
     org = ctx.organisation
     if org is None:
         raise CommandError("No organisation selected. Use /orgs to list them and /use <name> to pick one.")
-    params = read_params(cmd, ctx, flags={"bank", "template"}, period=True)
+    params = read_params(cmd, ctx, flags={"bank", "template"}, keyed={"seed": as_at_date, "lookback": positive_int},
+                         period=True)
     if "template" in params.flags:
         return guide(params.period)
     if "bank" in params.flags:
@@ -179,11 +190,32 @@ def start(ctx, cmd):
         account = _find_account(accounts, cmd.text)
         if not account.is_balance_sheet:
             raise CommandError(f"{account} is a profit and loss account; /reconcile is for balance sheet accounts.")
+    if account is not None and _open_items(account, params, cmd):
+        from . import openitems_wp
+
+        upload = ctx.input_file if cmd.input_file else None
+        period_end, intro = openitems_wp.setup(ctx, account, params, params.period, period_end, upload)
+        balance = _balances(ctx, period_end).get(account.source_id, ZERO)
+        return open_working_paper(ctx, account, period_end, balance, intro=intro)
+    if params.values:
+        raise CommandError("--seed and --lookback are for one account's open items, e.g. /reconcile 2000 --seed 30 Jun "
+                           "2026 << seed.xlsx.")
     if cmd.input_file:
         return upload_schedules(ctx, ctx.input_file, accounts, balances, period_end, account)
     if account is not None:
         return open_working_paper(ctx, account, period_end, balances.get(account.source_id, ZERO))
     return pack(ctx, accounts, balances, period_end)
+
+
+def _open_items(account, params, cmd):
+    """Whether this is the open-item form of /reconcile <account>: a seed, a window of more than a month, or an
+    account already reconciled as open items."""
+    from accounting.models import OpenItemLedger
+
+    period = params.period
+    multi = period is not None and (period.start.year, period.start.month) != (period.end.year, period.end.month)
+    return bool(params.values) or multi or account.recon_method == ReconMethod.OPEN_ITEMS or (
+        cmd.input_file and OpenItemLedger.objects.filter(account=account).exists())
 
 
 def _period_end(ctx, period):
@@ -388,6 +420,10 @@ def _refresh(ctx, rec, balance):
     rec.gl_balance = balance
     if rec.method == ReconMethod.NIL:
         rec.support_balance = ZERO
+    elif rec.method == ReconMethod.OPEN_ITEMS and not signed:
+        from .openitems_wp import support
+
+        rec.support_balance = support(rec)
     elif rec.method == ReconMethod.SUBLEDGER and not signed:
         rec.support_balance = _ledger(ctx, rec)
     elif rec.method in SCHEDULE_METHODS and not signed and (rec.support_balance is None
@@ -541,6 +577,10 @@ def show(ctx, rec, balance, *, intro=""):
             table.add(n, date.fromisoformat(item["date"]) if item.get("date") else None, item["description"], source,
                       Decimal(item["amount"]))
         table.add(None, None, "Total", "", rec.items_total, total=True)
+    if rec.method == ReconMethod.OPEN_ITEMS:
+        from . import openitems_wp
+
+        openitems_wp.blocks(result, rec)
     if rec.schedule or rec.schedule_source.get("ledger"):
         _schedule_table(result, rec)
     elif rec.method in SCHEDULE_METHODS and rec.support_balance is None:
@@ -559,7 +599,12 @@ def show(ctx, rec, balance, *, intro=""):
         result.add(Note(signed + (" (self-reviewed)." if rec.self_reviewed else ".")))
     elif rec.prepared_at:
         result.add(Note(f"Prepared by {_who(rec.prepared_by, rec.prepared_at)}; awaiting review (type reviewed)."))
-    result.add(Note(HELP, "warning"))
+    if rec.method == ReconMethod.OPEN_ITEMS:
+        from .openitems_wp import HELP as OPEN_HELP
+
+        result.add(Note(OPEN_HELP, "warning"))
+    else:
+        result.add(Note(HELP, "warning"))
     return result
 
 

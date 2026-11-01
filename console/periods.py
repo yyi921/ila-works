@@ -120,6 +120,8 @@ def _month(text):
 def parse_period(text, *, today, fy):
     """Read one period. Returns a Period, or None if ``text`` isn't a period at all."""
     text = re.sub(r"\s+", " ", text.strip().lower())
+    if "_" in text:  # 1 Jul 2025_30 Jun 2026 is a range, like "1 Jul 2025 to 30 Jun 2026"
+        text = re.sub(r"\s*_\s*", " to ", text, count=1)
     if text in ("today", "now"):
         return Period(today, today, fmt(today))
     if text == "yesterday":

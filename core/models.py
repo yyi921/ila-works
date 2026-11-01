@@ -42,6 +42,7 @@ class ReconMethod(models.TextChoices):
     SUBLEDGER = "subledger", "Debtors/creditors ledger"
     NIL = "nil", "Should be nil"
     SCHEDULE = "schedule", "Schedule"
+    OPEN_ITEMS = "open_items", "Open items (roll-forward)"
     FIXED_ASSETS = "fixed_assets", "Fixed asset register"
     GST = "gst", "GST return"
     INTERCOMPANY = "intercompany", "Intercompany"

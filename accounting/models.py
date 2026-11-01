@@ -444,6 +444,238 @@ class Cogs(TenantModel):
         return f"{self.organisation} COGS"
 
 
+# --- Open-item reconciliation (roll-forward) ----------------------------------------------------------------------
+#
+# A balance sheet account reconciled as open items (accruals, prepayments, deposits...) has its own ledger in iLA:
+# the accountant's categories, one description per accrual or invoice (a code that never changes), and a register of
+# every posting in the account tagged to a description, each traced to its Xero record and line. Opening + movements =
+# closing, and closing = the descriptions still open. The register is rebuilt from iLA's copy of Xero whenever it is
+# run; what a person decides (category and description edits, a posting moved or confirmed) is kept and re-applied.
+# See accounting/openitems.py.
+
+
+class CategoryBehaviour(models.TextChoices):
+    IN_ARREARS = "in_arrears", "In arrears (billed after the month)"
+    STANDING = "standing", "Standing (built up, billed periodically)"
+    SPREAD = "spread", "Spread over a period (runs down)"
+    EVENT = "event", "Event-driven"
+    REPORT = "report", "Computed from a report"
+    STATEMENT = "statement", "Agreed to a statement"
+    NIL = "nil", "Should be nil"
+    AD_HOC = "ad_hoc", "Ad hoc"
+
+
+class OpenItemLedger(TenantModel):
+    """One account's open-item ledger: where it starts, how it was seeded, and the job that builds it."""
+
+    class Seed(models.TextChoices):
+        UPLOAD = "upload", "Seed file from the accountant"
+        ILA = "ila", "Seed worked out by iLA"
+
+    account = models.OneToOneField(Account, on_delete=models.CASCADE, related_name="open_item_ledger")
+    opening_date = models.DateField(help_text="The balance at the end of this day is the starting point.")
+    opening_balance = models.DecimalField(**MONEY, default=Decimal("0"),
+                                          help_text="Xero's balance at the opening date (debit positive).")
+    seed = models.CharField(max_length=10, choices=Seed.choices)
+    seed_source = models.JSONField(default=dict, blank=True, help_text="The seed file (name, SHA-256, rows) or iLA's "
+                                   "look-back window; who and when.")
+    lookback_months = models.PositiveSmallIntegerField(
+        default=3, help_text="For a seed worked out by iLA: how many months before the opening date to read to break "
+                             "the opening balance down.")
+    seed_rows = models.JSONField(default=list, blank=True, help_text="The seed's descriptions as given (kept so the "
+                                 "ledger can be rebuilt).")
+    gl_rows = models.JSONField(default=list, blank=True, help_text="An uploaded GL (Xero's Account Transactions for "
+                               "this account), used instead of iLA's copy of Xero.")
+    gl_source = models.JSONField(default=dict, blank=True, help_text="The uploaded GL file: name, SHA-256, rows, dates.")
+    built_to = models.DateField(null=True, blank=True, help_text="Postings are read up to this day.")
+    balances = models.JSONField(default=dict, blank=True, help_text="Xero's balance (debit positive) at each month end "
+                                "read, {date: amount}.")
+    job_status = models.CharField(max_length=10, blank=True)
+    job_message = models.TextField(blank=True)
+    job_started_at = models.DateTimeField(null=True, blank=True)
+    job_finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(TenantModel.Meta):
+        verbose_name = "open-item ledger"
+
+    def __str__(self):
+        return f"{self.account} from {self.opening_date:%d %b %Y}"
+
+    @property
+    def start(self):
+        from datetime import timedelta
+
+        return self.opening_date + timedelta(days=1)
+
+    @property
+    def prefix(self):
+        return f"D{self.account.code or self.account.pk}"
+
+
+class OpenItemCategory(TenantModel):
+    """The accountant's structure for an account: what its balance is made of. Every field can be changed from the
+    console (``category ...`` in the working paper) or in admin."""
+
+    ledger = models.ForeignKey(OpenItemLedger, on_delete=models.CASCADE, related_name="categories")
+    code = models.CharField(max_length=12, help_text="Short code that never changes, e.g. UTL.")
+    name = models.CharField(max_length=100)
+    scope = models.CharField(max_length=255, blank=True, help_text="What belongs here, e.g. Electricity, water, waste.")
+    behaviour = models.CharField(max_length=12, choices=CategoryBehaviour.choices, default=CategoryBehaviour.AD_HOC)
+    standing = models.BooleanField(default=False, help_text="Descriptions in it net against each other (an annual "
+                                   "bill accrued monthly, a stock adjustment): a bill or credit uses up the oldest "
+                                   "open ones first.")
+    accounts = models.CharField(max_length=255, blank=True, help_text="Account codes (the other side of the journal) "
+                                "that belong here, e.g. 6034 6780.")
+    words = models.CharField(max_length=255, blank=True, help_text="Words in a line or narration that mean this "
+                             "category, comma separated, e.g. electricity, waste removal. Checked before accounts.")
+    order = models.PositiveSmallIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.UniqueConstraint(fields=["ledger", "code"], name="accounting_openitemcategory_code_uniq"),
+        ]
+        ordering = ["order", "code"]
+        verbose_name_plural = "open-item categories"
+
+    def __str__(self):
+        return f"{self.code} {self.name}"
+
+    def account_codes(self):
+        return [c for c in self.accounts.replace(",", " ").split() if c]
+
+    def word_list(self):
+        return [w.strip().lower() for w in self.words.split(",") if w.strip()]
+
+
+class OpenItem(TenantModel):
+    """A description: one accrual, invoice or prepaid item in the account, with a code that never changes. iLA makes
+    them from the seed and from the postings it reads; a person can change the text, category, counterparty,
+    reference and note, and those changes are kept when the ledger is rebuilt (found again by ``origin_key``)."""
+
+    class Origin(models.TextChoices):
+        SEED = "seed", "Seed file"
+        ILA_SEED = "ila_seed", "Seed worked out by iLA"
+        UNANALYSED = "unanalysed", "Opening not analysed"
+        RAISED = "raised", "Raised by a posting"
+        UNLINKED = "unlinked", "Release that matched nothing"
+        OVER = "over", "Billed or released more than was open"
+
+    ledger = models.ForeignKey(OpenItemLedger, on_delete=models.CASCADE, related_name="items")
+    code = models.CharField(max_length=30)
+    category = models.ForeignKey(OpenItemCategory, null=True, blank=True, on_delete=models.SET_NULL,
+                                 related_name="items")
+    description = models.CharField(max_length=255)
+    counterparty = models.CharField(max_length=255, blank=True)
+    reference = models.CharField(max_length=255, blank=True)
+    service_period = models.DateField(null=True, blank=True)
+    origin = models.CharField(max_length=12, choices=Origin.choices)
+    origin_key = models.CharField(max_length=255, help_text="How a rebuild finds this description again.")
+    raised_on = models.DateField(null=True, blank=True)
+    original_amount = models.DecimalField(**MONEY, default=Decimal("0"))
+    raised_by = models.CharField(max_length=255, blank=True, help_text="The Xero record (or seed row) that raised it.")
+    refs = models.JSONField(default=list, blank=True, help_text="Invoice numbers it names.")
+    match_key = models.CharField(max_length=255, blank=True, help_text="Its narration, normalised, for matching.")
+    match_accounts = models.JSONField(default=dict, blank=True, help_text="{account code: amount} of the lines it "
+                                      "was raised from, for matching a mirror reversal.")
+    bill = models.JSONField(default=dict, blank=True, help_text="The supplier's bill it names, if found in Xero.")
+    note = models.TextField(blank=True)
+    edited = models.JSONField(default=list, blank=True, help_text="Fields a person changed; a rebuild keeps them.")
+    is_active = models.BooleanField(default=True)
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.UniqueConstraint(fields=["ledger", "code"], name="accounting_openitem_code_uniq"),
+            models.UniqueConstraint(fields=["ledger", "origin_key"], name="accounting_openitem_origin_uniq"),
+        ]
+        ordering = ["raised_on", "code"]
+        verbose_name = "open-item description"
+
+    def __str__(self):
+        return f"{self.code} {self.description}"
+
+
+class OpenItemPosting(TenantModel):
+    """One posting in the account, tagged to a description: the transaction register. Rebuilt on every run."""
+
+    class Movement(models.TextChoices):
+        OPENING = "opening", "Opening"
+        ADDITION = "addition", "Addition"
+        REVERSAL = "reversal", "Reversal"
+        PAYMENT = "payment", "Payment"
+        ADJUSTMENT = "adjustment", "Adjustment"
+
+    class Confidence(models.TextChoices):
+        GIVEN = "given", "Given"
+        NEW = "new", "New description"
+        LINKED = "linked", "Linked"
+        PROPOSED = "proposed", "Proposed"
+        CONFIRMED = "confirmed", "Confirmed by a person"
+
+    ledger = models.ForeignKey(OpenItemLedger, on_delete=models.CASCADE, related_name="postings")
+    item = models.ForeignKey(OpenItem, on_delete=models.CASCADE, related_name="postings")
+    txn = models.CharField(max_length=80, help_text="Stable ID: record, Xero ID and line(s).")
+    seq = models.PositiveIntegerField(default=0)
+    date = models.DateField()
+    movement = models.CharField(max_length=12, choices=Movement.choices)
+    amount = models.DecimalField(**MONEY, help_text="Debit positive, credit negative.")
+    record = models.CharField(max_length=30, blank=True, help_text="Manual journal, Bill, Spend money...")
+    record_id = models.CharField(max_length=255, blank=True)
+    record_number = models.CharField(max_length=255, blank=True)
+    lines = models.CharField(max_length=100, blank=True, help_text="The record's line(s) on this account.")
+    from_lines = models.CharField(max_length=255, blank=True, help_text="The lines (account) the category was read "
+                                  "from.")
+    basis = models.CharField(max_length=255, blank=True, help_text="How it was linked to the description.")
+    confidence = models.CharField(max_length=10, choices=Confidence.choices)
+    narration = models.TextField(blank=True)
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.UniqueConstraint(fields=["ledger", "txn"], name="accounting_openitemposting_txn_uniq"),
+        ]
+        ordering = ["seq"]
+        verbose_name = "open-item posting"
+
+    def __str__(self):
+        return f"{self.txn} {self.amount}"
+
+    @property
+    def xero_url(self):
+        if self.record == "Manual journal":
+            return f"https://go.xero.com/Journal/View.aspx?invoiceID={self.record_id}"
+        if self.record in ("Bill", "Supplier credit note"):
+            return f"https://go.xero.com/AccountsPayable/View.aspx?InvoiceID={self.record_id}"
+        if self.record in ("Sales invoice", "Customer credit note"):
+            return f"https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID={self.record_id}"
+        if self.record in ("Spend money", "Receive money"):
+            return f"https://go.xero.com/Bank/ViewTransaction.aspx?bankTransactionID={self.record_id}"
+        return ""
+
+
+class OpenItemDecision(TenantModel):
+    """A person's decision on a posting, re-applied on every rebuild: move it to another description, or confirm a
+    proposed link. Keyed by the posting's stable ID."""
+
+    class Kind(models.TextChoices):
+        MOVE = "move", "Move to another description"
+        CONFIRM = "confirm", "Confirm the proposed link"
+
+    ledger = models.ForeignKey(OpenItemLedger, on_delete=models.CASCADE, related_name="decisions")
+    txn = models.CharField(max_length=80)
+    kind = models.CharField(max_length=10, choices=Kind.choices)
+    item_code = models.CharField(max_length=30, blank=True)
+    decided_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                   related_name="+")
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.UniqueConstraint(fields=["ledger", "txn"], name="accounting_openitemdecision_txn_uniq"),
+        ]
+
+    def __str__(self):
+        return f"{self.txn}: {self.get_kind_display()} {self.item_code}".strip()
+
+
 def _remember_deleted(sender, instance, **kwargs):
     """A profile a person deletes stays deleted: the scan skips its key (listed on the set-up, where it can be
     removed again). Scans never delete profiles themselves."""

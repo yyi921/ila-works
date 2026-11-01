@@ -615,3 +615,6 @@ class BillReadingAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+
+from . import admin_openitems  # noqa: E402,F401  (open-item reconciliation)
