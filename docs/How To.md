@@ -4,7 +4,7 @@ A practical guide to the iLA console: what each command is for, how to type it, 
 full list of parameters with examples, see [Command reference](Command%20reference.md), or type `/help <command>` in
 the console.
 
-_Last updated: 25 October 2026 (added `/accrue`, the month-end accrual review, and reading bill PDFs)._
+_Last updated: 7 November 2026 (added `/review`, the month-end P&L review, with core checks and review requests)._
 
 ---
 
@@ -90,6 +90,8 @@ Quarters and financial years follow the year end set in Xero.
 | Save the reconciliation pack for the month-end file | `/reconcile --Sep 2026 >> reconciliations.xlsx` |
 | Support prepayments, accruals or a loan with a schedule | `/reconcile --template`, then `/reconcile --Sep 2026 << schedules.csv` |
 | Check how many Xero items are still unreconciled today | `/reconcile --bank` |
+| Review last month's P&L: what moved against last month, last year and budget | `/review`, then `why 3`, `note 4 <text>`, `ok 1-5` |
+| Ask iLA to look at something every month, in your own words | Admin → Review → Review requests: write it, *Trial run*, *Confirm & save* |
 | Review the month's accruals and build the journal file | `/accrue --Sep 2026`, then `accept bills`, `why 8`, `build` |
 | Let iLA read the PDFs of bills that came after month end | `/accrue --read --Sep 2026`, then `/accrue --refresh` |
 | Spot unusual or missing supplier bills | `/compare --bill` |
@@ -164,6 +166,55 @@ Quarters and financial years follow the year end set in Xero.
 - **Purpose:** bills due in the next 7 days, overdue ones first.
 - **Syntax:** `/bills [--due <days>] [--overdue] [>> file.xlsx]`
 - **Use it:** to plan the payment run. `--due 14` looks two weeks ahead; `--overdue` shows only overdue bills.
+
+### Month-end review
+
+#### `/review` — the month-end P&L review
+- **Purpose:** one list of what moved in the month's P&L and why, for you to work through: OK it, note what iLA
+  can't know, or act on it. **Xero isn't changed.** See docs/Month-end Review — Design.md for the whole cycle.
+- **Syntax:** `/review [--<period>]`: one whole, finished month (default: the last full month).
+- **The core checks** (on by default; switch each off, or set its materiality, in Admin → Review → Review settings):
+
+  | Check | Compares |
+  | --- | --- |
+  | C1 | The month, every P&L line and subtotal, against last month |
+  | C2 | … against the same month last year |
+  | C3 | … against budget |
+  | C4 | Year to date against the YTD budget |
+  | C5–C8 | COGS %, labour %, EBITDA % and net profit % of revenue, against last month, last year and budget |
+
+  Materiality: by default any movement over **$1,000 either way** is raised. For each check you can set an amount, a
+  %, points (the ratio checks) or a combination, raised when any one is passed or only when all are. For the ratio
+  checks the amount is the move's effect in dollars (points moved × the month's revenue).
+- **The accounts behind the ratios:** COGS = every Cost of sales account; labour = accounts named wages, salaries,
+  super, payroll, leave, Workcover or staff; EBITDA adds back interest, income tax, depreciation and amortisation.
+  `/review` lists what it used; set your own codes and ranges (e.g. `6300-6380`) in Review settings.
+- **iLA's reading** for each finding: how much and which way; against the usual month (12-month average); a cost with
+  nothing this month, or less than half the usual, is flagged as possibly missing a bill, journal or accrual; the
+  same month last year when last month had nothing (seasonal?); anything accepted in `/accrue` not yet in Xero; and
+  your note on the same line from an earlier month.
+- **Review requests** (Admin → Review → Review requests): write what you want iLA to look at, e.g. *"iLA, please look
+  at any revenue unassigned to any events."* Save, then **Trial run**: iLA reads Xero for the last 2 months (set in
+  Review settings, or per request), works out the check and shows its result on the page. Reword and trial run
+  again until it's right; then an admin clicks **Confirm & save**. `/review` then runs the confirmed check every
+  month and shows its result after the core checks, in the same layout as the trial run. The AI is used only at the
+  trial run; the saved check is run by code. If part of a request can't be done (e.g. hours, rosters), the trial run
+  says so. Change the wording any time: the confirmed check keeps running until the new one is confirmed. Switch a
+  request off with *On*.
+- **In the open review, type:**
+
+  | Type | What it does |
+  | --- | --- |
+  | `why 3` | The figures, what they're compared with, the last 13 months, and your note |
+  | `note 4 <text>` | Add what iLA can't know ("PBR needed extra security"). The finding counts as reviewed, and the note comes back when that line comes up again |
+  | `ok 1-5`, `ok all` | Reviewed: no action needed |
+  | `later 2` | Not yet: stays open |
+  | `act 6` | Marked acted on, with the command most likely to fix it (e.g. `/accrue --Oct 2026`, `/tag`) |
+  | `act 6 /accrue --Oct 2026` | Marked acted on, and runs that command now |
+  | `refresh` | Read Xero again; statuses and notes are kept |
+  | `done` (or `/cancel`) | Close the review; statuses and notes are kept |
+
+- **Admin → Review → Review findings** lists every status and note by month.
 
 ### Month-end accruals
 
@@ -562,13 +613,16 @@ Nothing is written to Xero; a person imports the file.
 | iLA asks for new permissions, or Xero data won't load | Type `/connect` to reconnect Xero. |
 | Results are for the wrong company | Type `/orgs`, then `/use <name>`. |
 | `/tag` proposes nothing for most rows | Narrow with `--desc` or `--contact` and use `--to`, or `set` rows yourself. Make sure the dimension's values have start and end dates. |
-| Plain text gives an error | Without an open `/tag` preview, `/createTag`, invoice draft or `/reconcile` working paper, every command must start with `/` (or `_` for built ones). |
+| Plain text gives an error | Without an open `/tag` preview, `/createTag`, invoice draft, `/reconcile` working paper, `/accrue` or `/review`, every command must start with `/` (or `_` for built ones). |
 | `/_createInvoice` says the model isn't set up | The AI key (`ANTHROPIC_API_KEY`) is missing on the server. Ask the administrator. |
 | `/createTag` says the file needs fixing | Read the listed rows, correct the CSV and choose it again with `<<`. |
 | `/createTag` file came from Excel and looks garbled | Save it as **CSV UTF-8** (File → Save As). |
 | `/_createInvoice` says there's no invoice set-up | Add one in admin → Organisation → Invoice set-ups. |
 | Figures look a few minutes old | Xero reads are cached for 5 minutes. |
 | `/reconcile` says an account has no reconciliation method | An admin sets it in Admin → Chart of accounts. |
+| `/review` raises too many findings | Raise the materiality in Admin → Review → Review settings, per check (e.g. over $5,000 or over 10%), or switch checks off. `ok all` clears the rest. |
+| `/review` says the month hasn't finished | It reviews whole months only; use the last full month (the default). |
+| A review request's trial run failed | The page says why. Reword the request (name the accounts, the dimension or the amount) and trial run again. |
 | `/accrue` says there's no accrual set-up | Admin → Accounting → Accruals: add the organisation's accrual account, then *Copy history from Xero, then scan*. |
 | `/accrue` `read` says Xero refused access | iLA needs Xero's attachments permission: type `/connect` and reconnect the organisation. |
 | `build` says no line is accepted | Accept (or adjust) lines first, e.g. `accept bills`. |
@@ -603,6 +657,7 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 7 Nov 2026 | Added `/review`: the month-end P&L review with the core checks C1–C8 (materiality per check in admin) and review requests (prompt → trial run → confirm), worked with `why`, `note`, `ok`, `later` and `act`. |
 | 25 Oct 2026 | Added `/accrue`: the month's proposed accruals by source with evidence; accept, adjust or reject each with a reason; `why`, `compare`, `build`. Reading bill PDFs (`read`) to place bills in their month (needs a reconnect for Xero's attachments permission). Accrual history now includes sales invoices. |
 | 24 Oct 2026 | `/reconcile`: the accrual account (e.g. 2000) takes its schedule from the Expectation Ledger's posted accrual lines for the month. |
 | 24 Oct 2026 | `/reconcile` schedules: `/reconcile --template`, and `<< schedule.csv` for one account or (with an Account column) several; the total is the supporting balance, lines with an ended period are flagged. |

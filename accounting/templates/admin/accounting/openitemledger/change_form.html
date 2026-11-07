@@ -1,0 +1,73 @@
+{% extends "admin/change_form.html" %}
+{% comment %}
+An open-item ledger's page: its reconciliation at a month end (the roll-forward against Xero, the month by category,
+and every open description with its balance), above the settings and the categories. Choose another month end with
+the links; the descriptions link to their postings.
+{% endcomment %}
+
+{% block form_top %}
+{% if recon %}
+<div class="module" style="margin-bottom:20px">
+  <h2>Reconciliation at {{ recon_at|date:"j M Y" }}</h2>
+  <p style="padding:8px 10px;margin:0">
+    Month end:
+    {% for day in recon_days %}
+      {% if day == recon_at %}<strong>{{ day|date:"M Y" }}</strong>{% else %}<a href="?at={{ day|date:'Y-m-d' }}">{{ day|date:"M Y" }}</a>{% endif %}{% if not forloop.last %} · {% endif %}
+    {% endfor %}
+  </p>
+  <p style="padding:0 10px 8px;margin:0">
+    Xero balance <strong>{{ recon.xero|floatformat:"2g" }}</strong> · open descriptions <strong>{{ recon.total|floatformat:"2g" }}</strong>
+    · difference <strong>{{ recon_difference|floatformat:"2g" }}</strong>
+    {% if recon.proposed %} · <a href="{% url 'admin:accounting_openitemposting_changelist' %}?ledger__id__exact={{ original.pk }}&confidence__exact=proposed">{{ recon.proposed }} proposed link(s) to check</a>{% endif %}
+  </p>
+
+  <h3 style="padding:0 10px">Roll-forward (amounts as the balance sheet shows them)</h3>
+  <table style="width:100%">
+    <thead><tr><th>Month end</th><th style="text-align:right">Opening</th><th style="text-align:right">Added</th>
+      <th style="text-align:right">Reversed</th><th style="text-align:right">Billed / other</th>
+      <th style="text-align:right">Closing</th><th style="text-align:right">Xero</th><th style="text-align:right">Difference</th></tr></thead>
+    <tbody>
+    {% for m in recon.months %}
+      <tr><td>{{ m.end|date:"j M Y" }}</td><td style="text-align:right">{{ m.opening|floatformat:"2g" }}</td>
+        <td style="text-align:right">{{ m.added|floatformat:"2g" }}</td><td style="text-align:right">{{ m.reversed|floatformat:"2g" }}</td>
+        <td style="text-align:right">{{ m.paid|floatformat:"2g" }}</td><td style="text-align:right"><strong>{{ m.closing|floatformat:"2g" }}</strong></td>
+        <td style="text-align:right">{{ m.xero|floatformat:"2g" }}</td><td style="text-align:right">{{ m.difference|floatformat:"2g" }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h3 style="padding:0 10px">By category, {{ recon_at|date:"F Y" }}</h3>
+  <table style="width:100%">
+    <thead><tr><th>Category</th><th style="text-align:right">Opening</th><th style="text-align:right">Added</th>
+      <th style="text-align:right">Released</th><th style="text-align:right">Closing</th><th style="text-align:right">Open</th></tr></thead>
+    <tbody>
+    {% for c in recon.categories %}
+      <tr><td>{{ c.name }}</td><td style="text-align:right">{{ c.opening|floatformat:"2g" }}</td>
+        <td style="text-align:right">{{ c.added|floatformat:"2g" }}</td><td style="text-align:right">{{ c.released|floatformat:"2g" }}</td>
+        <td style="text-align:right"><strong>{{ c.closing|floatformat:"2g" }}</strong></td><td style="text-align:right">{{ c.items }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h3 style="padding:0 10px">Open descriptions at {{ recon_at|date:"j M Y" }}</h3>
+  <table style="width:100%">
+    <thead><tr><th>Code</th><th>Category</th><th>Description</th><th>Counterparty</th><th>Reference</th><th>Raised</th>
+      <th style="text-align:right">Balance</th><th>Flags</th></tr></thead>
+    <tbody>
+    {% for row in recon.items %}
+      <tr><td><a href="{% url 'admin:accounting_openitem_change' row.item.pk %}">{{ row.item.code }}</a></td>
+        <td>{% if row.item.category %}{{ row.item.category.code }}{% else %}Not assigned yet{% endif %}</td>
+        <td>{{ row.item.description }}</td><td>{{ row.item.counterparty }}</td><td>{{ row.item.reference }}</td>
+        <td>{{ row.item.raised_on|date:"j M Y" }}</td><td style="text-align:right">{{ row.balance|floatformat:"2g" }}</td>
+        <td>{{ row.flags|join:" " }}</td></tr>
+    {% endfor %}
+      <tr><td></td><td></td><td><strong>Total</strong></td><td></td><td></td><td></td>
+        <td style="text-align:right"><strong>{{ recon.total|floatformat:"2g" }}</strong></td><td></td></tr>
+    </tbody>
+  </table>
+</div>
+{% elif recon_message %}
+<p class="errornote">{{ recon_message }}</p>
+{% endif %}
+{{ block.super }}
+{% endblock %}

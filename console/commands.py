@@ -883,6 +883,20 @@ def accrue(ctx, cmd):
     return start(ctx, cmd)
 
 
+@command(
+    "review",
+    summary="Month-end P&L review: the core checks (vs last month, last year and budget; YTD; COGS, labour, EBITDA "
+            "and net profit %) and your review requests, as one list of findings to work through.",
+    usage="/review [--<period>]",
+    params=[("--<period>", "One whole month, e.g. Oct 2026; default the last full month")],
+    examples=["/review", "/review --Oct 2026"],
+)
+def review(ctx, cmd):
+    from .review import start
+
+    return start(ctx, cmd)
+
+
 # --- Lookups ---------------------------------------------------------------------------------------------------
 
 
@@ -1186,7 +1200,7 @@ def clean(ctx, cmd):
 
 
 @command("cancel", summary="Drop your open /splittag or /tag preview, /createTag or /_createInvoice draft, or "
-                           "close a /reconcile working paper or /accrue review. Nothing is saved.",
+                           "close a /reconcile working paper, /accrue review or /review. Nothing is saved.",
          usage="/cancel", examples=["/cancel"], needs_source=False)
 def cancel(ctx, cmd):
     read_params(cmd, ctx)

@@ -19,6 +19,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/creditors` | `/ap` | Payables ageing by supplier (by days past due date). | `/creditors [--detail] [--top <n>] [>> file.xlsx]` |
 | `/bills` |  | Bills due in the next 7 days (or --due <days>), with overdue bills listed first. | `/bills [--due <days>] [--overdue] [>> file.xlsx]` |
 | `/accrue` |  | Month-end accrual review: proposed accruals by source with their evidence; accept, adjust or reject each, then build the journal file. | `/accrue [--<period>] [--read \| --refresh]` |
+| `/review` |  | Month-end P&L review: the core checks (vs last month, last year and budget; YTD; COGS, labour, EBITDA and net profit %) and your review requests, as one list of findings to work through. | `/review [--<period>]` |
 | `/reconcile` | `/recon`, `/rec` | Month-end balance sheet reconciliation: each account's Xero balance against its support, with reconciling items, schedules and preparer/reviewer sign-off. | `/reconcile [<account>] [--<period>] [<< schedule.csv] \| /reconcile --bank \| /reconcile --template` |
 | `/compare` |  | Compare bills, invoices or a P&L measure month by month to spot unusual, new or missing amounts. | `/compare --bill\|--invoice [<number>] [--supplier\|--customer <name or code>] [--account <code or name>] [--by account] [--<period>] [--detail] [--min <amount>]   or   /compare --revenue\|--cos\|--gp\|--expenses\|--profit [--<period>]` |
 | `/inv` | `/invoice`, `/bill` | Show one invoice, bill or credit note by its number. | `/inv <number>` |
@@ -192,6 +193,23 @@ Examples:
 - `/accrue --refresh`
 
 In an open review, type `accept <lines|all|bills|estimates>`, `adjust <line> <amount> <reason>`, `reject <line> <reason>`, `undo <line>`, `why <line>`, `read`, `refresh`, `compare`, `build` or `done`.
+
+### /review
+
+Month-end P&L review: the core checks (vs last month, last year and budget; YTD; COGS, labour, EBITDA and net profit %) and your review requests, as one list of findings to work through.
+
+Usage: `/review [--<period>]`
+
+| Parameter | Meaning |
+| --- | --- |
+| `--<period>` | One whole month, e.g. Oct 2026; default the last full month |
+
+Examples:
+
+- `/review`
+- `/review --Oct 2026`
+
+In an open review, type `why <n>`, `note <n> <text>`, `ok <n|n-m|all>`, `later <n>`, `act <n> [/command]`, `refresh` or `done`. Checks, materiality, ratio accounts and review requests are set in Admin → Review.
 
 ### /reconcile
 
