@@ -236,3 +236,24 @@ class CommandReference(models.Model):
 
     def __str__(self):
         return f"/{self.name}"
+
+
+class ReviewSession(TenantModel):
+    """A month's /review open in the console, so plain input (why 3, note 4 ..., ok 1-5, act 6) goes to it. ``data``
+    holds the findings as last worked out, so their numbers stay put while the review is open; statuses and notes
+    live on review.ReviewFinding."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        CLOSED = "closed", "Closed"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    period_end = models.DateField()
+    data = models.JSONField(default=dict, blank=True)
+
+    class Meta(TenantModel.Meta):
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Review {self.period_end:%b %Y} ({self.get_status_display()})"

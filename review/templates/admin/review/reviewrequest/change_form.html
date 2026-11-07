@@ -1,0 +1,20 @@
+{% extends "admin/change_form.html" %}
+{% comment %}
+A review request: save the wording, Trial run (iLA works out the check and runs it on the last months), then an
+admin confirms it so /review runs it every month.
+{% endcomment %}
+
+{% block submit_buttons_bottom %}
+{{ block.super }}
+{% if original %}
+<div class="submit-row" style="margin-top:6px">
+  <input type="submit" name="_trial" value="Trial run" {% if running %}disabled title="A trial run is going"{% endif %}>
+  {% if can_confirm %}
+  <input type="submit" name="_confirm" value="Confirm &amp; save" class="default">
+  {% else %}
+  <span style="padding:8px">Only an admin can confirm.</span>
+  {% endif %}
+  <span style="padding:8px">Save any change to the request before a trial run.</span>
+</div>
+{% endif %}
+{% endblock %}

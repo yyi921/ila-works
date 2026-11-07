@@ -35,6 +35,11 @@ HOW_TO = {
               "their PDFs when read; else estimates from earlier months), with the evidence. Accept, adjust or reject "
               "each with a reason (accept 1-5, adjust 3 1,200 <reason>, reject 4 <reason>, why 3), then build the "
               "journal file to stamp and import. read reads the bill PDFs first.",
+    "review": "Month-end P&L review: /review (last full month) or /review --Oct 2026 lists what moved past materiality "
+              "against last month, last year and budget, YTD against budget, and COGS, labour, EBITDA and net profit "
+              "%, then your review requests, each with iLA's reading. Work it with why 3, note 4 <text>, ok 1-5, "
+              "later 2, act 6 [/command]. Checks, materiality and review requests (write, trial run, confirm) are in "
+              "Admin > Review.",
     "inv": "Open one invoice, bill or credit note by its number, with lines, payments and amount due.",
     "find": "Search contacts and invoice or bill numbers and references, e.g. /find smith.",
     "dim": "See what you can tag by before tagging: Xero's tracking categories (Xero allows 2 active and 4 in all) "
