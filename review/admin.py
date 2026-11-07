@@ -1,5 +1,6 @@
-"""Admin for the month-end review: settings with the eight core checks (switch and materiality each), review
-requests with their trial run and confirmation, and the findings people worked through."""
+"""Admin for the month-end review: settings (the accounts in each group), review requests with their trial run and
+confirmation, and the review points (notes and sign-offs) people left in /review. The core checks' materiality is
+kept in the database for later but not shown while /review shows every movement."""
 
 from django.contrib import admin, messages
 from django.http import HttpResponseRedirect
@@ -7,7 +8,7 @@ from django.utils.html import format_html, format_html_join
 
 from accounting import jobs
 
-from .models import CoreCheck, RequestStatus, ReviewFinding, ReviewRequest, ReviewSettings
+from .models import RequestStatus, ReviewFinding, ReviewRequest, ReviewSettings
 from .requests import SpecError, confirm, describe, trial_run
 
 SOURCE_FIELDS = ("source_system", "source_id", "source_updated_at", "source_hash")
@@ -17,30 +18,14 @@ def can_confirm(user):
     return user.is_superuser or user.has_perm("review.confirm_reviewrequest")
 
 
-class CoreCheckInline(admin.TabularInline):
-    model = CoreCheck
-    fields = ("code", "enabled", "amount", "percent", "points", "join")
-    readonly_fields = ("code",)
-    extra = 0
-    can_delete = False
-
-    def has_add_permission(self, request, obj=None):
-        return False
-
-
 @admin.register(ReviewSettings)
 class ReviewSettingsAdmin(admin.ModelAdmin):
-    """The core checks are created with the defaults (on; any movement over $1,000 either way) the first time
-    /review runs or this page is saved."""
+    """Which accounts make up Cost of sales, Labour, Depreciation & amortisation, Interest and Income tax in /review
+    (and so the ratios). Cost accounts in none of them are Other operating costs."""
 
     list_display = ("organisation", "labour_accounts", "trial_months", "pack_view")
     fields = ("organisation", "cogs_accounts", "labour_accounts", "interest_accounts", "tax_accounts",
               "depreciation_accounts", "trial_months", "pack_view")
-    inlines = [CoreCheckInline]
-
-    def save_model(self, request, obj, form, change):
-        super().save_model(request, obj, form, change)
-        ReviewSettings.for_organisation(obj.organisation)
 
 
 @admin.register(ReviewRequest)
@@ -165,15 +150,37 @@ def _show(value, kind):
 
 @admin.register(ReviewFinding)
 class ReviewFindingAdmin(admin.ModelAdmin):
-    list_display = ("period_end", "key", "label", "status", "note", "updated_by", "updated_at", "organisation")
+    """Notes and sign-offs left in /review, one per month and reference (account code, group or RR-01)."""
+
+    list_display = ("period_end", "key", "label", "status", "signed", "note", "updated_by", "updated_at",
+                    "organisation")
     list_filter = ("organisation", "period_end", "status")
-    list_editable = ("status", "note")
+    list_editable = ("note",)
     search_fields = ("key", "label", "note")
-    readonly_fields = ("period_end", "key", "subject", "label", "action", "updated_by") + SOURCE_FIELDS
+    fields = ("organisation", "period_end", "key", "label", "status", "note", "signed_amount", "signed_at",
+              "signed_by", "history_table", "updated_by")
+    readonly_fields = ("organisation", "period_end", "key", "label", "status", "signed_amount", "signed_at",
+                       "signed_by", "history_table", "updated_by")
 
     def has_add_permission(self, request):
         return False
 
+    @admin.display(description="Signed off")
+    def signed(self, obj):
+        if obj.status != "signed_off":
+            return "—"
+        return f"{obj.signed_by or '?'} {obj.signed_at:%d %b %Y}, at {obj.signed_amount:,.2f}"
+
+    @admin.display(description="History")
+    def history_table(self, obj):
+        if not obj.history:
+            return "—"
+        return format_html("<ul>{}</ul>", format_html_join("", "<li>{} {}: {} {}</li>", (
+            (h.get("at", "")[:16].replace("T", " "), h.get("by", ""), h.get("what", ""),
+             h.get("note") or h.get("amount") or h.get("refs") or "") for h in reversed(obj.history))))
+
     def save_model(self, request, obj, form, change):
         obj.updated_by = request.user
+        if "note" in form.changed_data:
+            obj.log(request.user, "notes edited in admin", note=obj.note)
         super().save_model(request, obj, form, change)

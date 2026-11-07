@@ -1,9 +1,10 @@
-"""The month-end P&L review (/review): the core checks every business gets, the review requests an organisation adds
-in its own words, and the findings people work through. See docs/Month-end Review — Design.md.
+"""The month-end P&L review (/review): the P&L by group against last month, last year or budget, the review
+requests an organisation adds in its own words, and the review points (notes and sign-offs) people leave on GL
+accounts, groups and requests. See docs/Month-end Review — Design.md.
 
-Settings, core checks and review requests are edited in admin. A finding's status and note are kept by its key
-(check + subject) for the month, so re-running /review never loses what a person said; notes are shown again when
-the same subject comes up in a later month.
+Settings and review requests are edited in admin. A review point is kept by its reference (an account code, a group
+or RR-01) for the month, whatever the comparison. The core checks' materiality (CoreCheck) is kept for later but not
+used for now.
 """
 
 from decimal import Decimal
@@ -24,8 +25,9 @@ class PackView(models.TextChoices):
 
 
 class ReviewSettings(TenantModel):
-    """One per organisation: which accounts make up the ratios, the trial-run length and the pack's view. Account
-    lists are codes and ranges, e.g. "6300-6380, 6390". Blank means iLA works them out (see review.checks)."""
+    """One per organisation: which accounts make up the review's groups (and so the ratios), the trial-run length
+    and the pack's view. Account lists are codes and ranges, e.g. "6300-6380, 6390". Blank means iLA works them out
+    (see review.checks); cost accounts in no group are Other operating costs."""
 
     cogs_accounts = models.CharField("COGS accounts", max_length=255, blank=True,
                                      help_text="Blank: every Direct Costs account (Cost of sales).")
@@ -214,34 +216,44 @@ class ReviewRequest(TenantModel):
 
 class FindingStatus(models.TextChoices):
     OPEN = "open", "Open"
-    LATER = "later", "Later"
-    OK = "ok", "OK"
-    NOTED = "noted", "Noted"
-    ACTED = "acted", "Acted on"
-
-
-REVIEWED = (FindingStatus.OK, FindingStatus.NOTED, FindingStatus.ACTED)
+    SIGNED_OFF = "signed_off", "Signed off"
 
 
 class ReviewFinding(TenantModel):
-    """What a person decided about one finding in a month: its status and note. ``key`` is the check and subject
-    ("C3:6345", "C6:labour", "RR-01:INV-2231"); ``subject`` is the check-free part, so a note on 6345 in one month is
-    shown again when 6345 comes up in a later month."""
+    """One review point for a month: a GL account ("4061"), a group of accounts ("lab") or a review request
+    ("RR-01"), whatever it was compared with. It holds the notes and the sign-off: who, when, and the month's actual
+    amount at the time, so iLA can show when the numbers have moved since. ``history`` keeps every sign-off, reopen
+    and note."""
 
     period_end = models.DateField()
-    key = models.CharField(max_length=200)
+    key = models.CharField("reference", max_length=200)
     subject = models.CharField(max_length=200, db_index=True)
     label = models.CharField(max_length=255, blank=True)
     status = models.CharField(max_length=10, choices=FindingStatus.choices, default=FindingStatus.OPEN)
-    note = models.TextField(blank=True)
+    note = models.TextField("notes", blank=True, help_text="One note per line.")
     action = models.CharField(max_length=200, blank=True, help_text="The command used to act on it.")
+    signed_amount = models.DecimalField(null=True, blank=True, help_text="The month's actual when signed off.",
+                                        **MONEY)
+    signed_at = models.DateTimeField(null=True, blank=True)
+    signed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                  related_name="+")
+    history = models.JSONField(default=list, blank=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
                                    related_name="+")
 
     class Meta(TenantModel.Meta):
+        verbose_name = "review point"
         ordering = ["-period_end", "key"]
         constraints = TenantModel.Meta.constraints + [
             models.UniqueConstraint(fields=["organisation", "period_end", "key"], name="review_finding_key_uniq")]
 
     def __str__(self):
         return f"{self.period_end:%b %Y} {self.key}: {self.get_status_display()}"
+
+    @property
+    def notes(self):
+        return [line for line in self.note.splitlines() if line.strip()]
+
+    def log(self, user, what, **details):
+        self.history = self.history + [{"at": timezone.now().isoformat(timespec="seconds"),
+                                        "by": getattr(user, "username", "") or "", "what": what, **details}]

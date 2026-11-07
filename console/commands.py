@@ -155,12 +155,34 @@ def _snapshot(ctx):
     ))
     tables.append(_recon_table(unreconciled))
 
+    tables.append(_review_table(ctx))
+
     for block in tables + notes:
         result.add(block)
     result.add(Note(RECON_NOTE))
     if not src.client.has_scope("accounting.budgets.read"):
         result.add(Note("Budgets need permission: reconnect with /connect to compare against budget.", "warning"))
     return result
+
+
+def _review_table(ctx):
+    """Where the month-end review of the last full month stands (see /review)."""
+    from core.models import Organisation
+
+    from .review import summary
+
+    month_end = ctx.today.replace(day=1) - timedelta(days=1)
+    table = Table([Column("Month-end review"), Column("")], title=f"Month-end review: {month_end:%B %Y}")
+    counts = summary(ctx.organisation, month_end) if isinstance(ctx.organisation, Organisation) else None
+    if counts is None:
+        table.add("Not started", f"/review --{month_end:%b %Y}")
+        return table
+    table.add("Groups signed off", f"{counts['signed']} of {counts['groups']}")
+    table.add("Changed since sign-off", f"{len(counts['changed'])}" + (f" ({', '.join(counts['changed'])})"
+                                                                     if counts["changed"] else ""))
+    table.add("Review requests signed off", f"{counts['requests_signed']} of {counts['requests']}")
+    table.add("Notes", str(counts["notes"]))
+    return table
 
 
 def _measures(ctx, params):
@@ -885,11 +907,18 @@ def accrue(ctx, cmd):
 
 @command(
     "review",
-    summary="Month-end P&L review: the core checks (vs last month, last year and budget; YTD; COGS, labour, EBITDA "
-            "and net profit %) and your review requests, as one list of findings to work through.",
-    usage="/review [--<period>]",
-    params=[("--<period>", "One whole month, e.g. Oct 2026; default the last full month")],
-    examples=["/review", "/review --Oct 2026"],
+    summary="Month-end P&L review: the P&L by group with GP, COGS, labour, EBITDA and net profit % against last "
+            "month, last year or budget (MTD or YTD), GL accounts per group (L1), and your review requests; leave "
+            "notes and sign off by account code, group or RR-01.",
+    usage="/review [--<period>] [--vs lm|ly|budget] [--mtd|--ytd] [--L0|--L1] [--<group> ...] [--refresh]",
+    params=[("--<period>", "One whole month, e.g. Oct 2026; default the last full month"),
+            ("--vs lm|ly|budget", "Compare with last month (default), the same period last year, or budget"),
+            ("--mtd / --ytd", "The month (default) or the year to date; YTD compares with last year or budget"),
+            ("--L0 / --L1", "L0: one table by group (default). L1: the GL accounts in each group"),
+            ("--<group>", "rev, cogs, oth, lab, opx, da, int or tax: that group's GL accounts (L1)"),
+            ("--refresh", "Read the figures from Xero again (otherwise the open review's figures are reused)")],
+    examples=["/review", "/review --Oct 2026 --vs budget", "/review --ytd --vs ly", "/review --rev --L1",
+              "/review --lab --cogs"],
 )
 def review(ctx, cmd):
     from .review import start

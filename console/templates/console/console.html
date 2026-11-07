@@ -80,7 +80,7 @@
     table.append(thead);
     const body = el("tbody");
     for (const row of block.rows) {
-      const tr = el("tr", row.total ? "total" : "");
+      const tr = el("tr", [row.total ? "total" : "", row.tone ? "tone-" + row.tone : ""].join(" ").trim());
       row.cells.forEach((v, i) => tr.append(el("td", (numeric[i] ? "num" : "") + (row.negative[i] ? " neg" : ""), v)));
       body.append(tr);
     }
