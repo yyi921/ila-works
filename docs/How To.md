@@ -4,7 +4,7 @@ A practical guide to the iLA console: what each command is for, how to type it, 
 full list of parameters with examples, see [Command reference](Command%20reference.md), or type `/help <command>` in
 the console.
 
-_Last updated: 7 November 2026 (added `/review`, the month-end P&L review, with core checks and review requests)._
+_Last updated: 8 November 2026 (`/review` rebuilt: the P&L by group with GL detail, notes and sign-off by account code, group or review request)._
 
 ---
 
@@ -90,7 +90,7 @@ Quarters and financial years follow the year end set in Xero.
 | Save the reconciliation pack for the month-end file | `/reconcile --Sep 2026 >> reconciliations.xlsx` |
 | Support prepayments, accruals or a loan with a schedule | `/reconcile --template`, then `/reconcile --Sep 2026 << schedules.csv` |
 | Check how many Xero items are still unreconciled today | `/reconcile --bank` |
-| Review last month's P&L: what moved against last month, last year and budget | `/review`, then `why 3`, `note 4 <text>`, `ok 1-5` |
+| Review last month's P&L by group against last month, last year or budget | `/review`, then `vs budget`, `L1 rev`, `note 4061 <text>`, `signoff rev` |
 | Ask iLA to look at something every month, in your own words | Admin → Review → Review requests: write it, *Trial run*, *Confirm & save* |
 | Review the month's accruals and build the journal file | `/accrue --Sep 2026`, then `accept bills`, `why 8`, `build` |
 | Let iLA read the PDFs of bills that came after month end | `/accrue --read --Sep 2026`, then `/accrue --refresh` |
@@ -115,8 +115,8 @@ Quarters and financial years follow the year end set in Xero.
 ### Snapshot and reports
 
 #### `/status` — the business at a glance
-- **Purpose:** cash, revenue, debtors, bills due (including overdue) and unreconciled items; or chosen measures
-  against budget and last year.
+- **Purpose:** cash, revenue, debtors, bills due (including overdue), unreconciled items and where the last full
+  month's `/review` stands; or chosen measures against budget and last year.
 - **Syntax:** `/status [--<period>] [--revenue|--cos|--gp|--expenses|--profit] [--mtd|--qtd|--ytd]`
 - **Use it:** first thing each day. Add a period and a measure to compare, e.g. `/status --FY2026 --profit`.
 
@@ -170,51 +170,66 @@ Quarters and financial years follow the year end set in Xero.
 ### Month-end review
 
 #### `/review` — the month-end P&L review
-- **Purpose:** one list of what moved in the month's P&L and why, for you to work through: OK it, note what iLA
-  can't know, or act on it. **Xero isn't changed.** See docs/Month-end Review — Design.md for the whole cycle.
-- **Syntax:** `/review [--<period>]`: one whole, finished month (default: the last full month).
-- **The core checks** (on by default; switch each off, or set its materiality, in Admin → Review → Review settings):
+- **Purpose:** the month's P&L at a glance, numbers only, for you to review, note and sign off line by line.
+  **Xero isn't changed.** See docs/Month-end Review — Design.md for the whole cycle.
+- **Syntax:** `/review [--<period>] [--vs lm|ly|budget] [--mtd|--ytd] [--L0|--L1] [--<group> ...] [--refresh]`.
+  One whole, finished month (default: the last full month).
+- **L0 (the default): one table of the P&L by group**, then the ratios:
 
-  | Check | Compares |
+  | Ref | Line |
   | --- | --- |
-  | C1 | The month, every P&L line and subtotal, against last month |
-  | C2 | … against the same month last year |
-  | C3 | … against budget |
-  | C4 | Year to date against the YTD budget |
-  | C5–C8 | COGS %, labour %, EBITDA % and net profit % of revenue, against last month, last year and budget |
+  | `rev` | Revenue |
+  | `cogs` | Cost of sales |
+  | | Gross profit |
+  | `oth` | Other income |
+  | `lab` | Labour |
+  | `opx` | Other operating costs (every cost account in no other group) |
+  | | EBITDA |
+  | `da` · `int` · `tax` | Depreciation & amortisation · Interest · Income tax |
+  | | Net profit (ties to Xero) |
+  | | Gross profit %, COGS %, Labour %, EBITDA %, Net profit % (of revenue) |
 
-  Materiality: by default any movement over **$1,000 either way** is raised. For each check you can set an amount, a
-  %, points (the ratio checks) or a combination, raised when any one is passed or only when all are. For the ratio
-  checks the amount is the move's effect in dollars (points moved × the month's revenue).
-- **The accounts behind the ratios:** COGS = every Cost of sales account; labour = accounts named wages, salaries,
-  super, payroll, leave, Workcover or staff; EBITDA adds back interest, income tax, depreciation and amortisation.
-  `/review` lists what it used; set your own codes and ranges (e.g. `6300-6380`) in Review settings.
-- **iLA's reading** for each finding: how much and which way; against the usual month (12-month average); a cost with
-  nothing this month, or less than half the usual, is flagged as possibly missing a bill, journal or accrual; the
-  same month last year when last month had nothing (seasonal?); anything accepted in `/accrue` not yet in Xero; and
-  your note on the same line from an earlier month.
-- **Review requests** (Admin → Review → Review requests): write what you want iLA to look at, e.g. *"iLA, please look
-  at any revenue unassigned to any events."* Save, then **Trial run**: iLA reads Xero for the last 2 months (set in
-  Review settings, or per request), works out the check and shows its result on the page. Reword and trial run
-  again until it's right; then an admin clicks **Confirm & save**. `/review` then runs the confirmed check every
-  month and shows its result after the core checks, in the same layout as the trial run. The AI is used only at the
-  trial run; the saved check is run by code. If part of a request can't be done (e.g. hours, rosters), the trial run
-  says so. Change the wording any time: the confirmed check keeps running until the new one is confirmed. Switch a
-  request off with *On*.
+  Columns: Actual, the comparison, **Var $** (actual less comparison) and **Var %**; ratios move in points (pts).
+  No materiality and no commentary: every movement is shown.
+- **Compare with:** `--vs lm` last month (default), `--vs ly` the same month last year, `--vs budget`. `--ytd`
+  shows the year to date against last year's YTD or the YTD budget.
+- **L1: the GL accounts.** `/review --rev` (or `--rev --L1`, or `L1 rev` in the open review) shows the revenue
+  accounts with the same columns, ending with the group total. `--L1` alone shows every group.
+- **The groups** come from Admin → Review → Review settings: Cost of sales (default every Cost of sales account),
+  Labour (default accounts named wages, salaries, super, payroll, leave, Workcover or staff), Depreciation &
+  amortisation, Interest and Income tax, as codes and ranges, e.g. `6300-6380`. `/review` lists what it used.
+- **Refer to a line** by its account code (`4061`, or a range `6300-6380`), its group (`rev`, `lab` …) or a review
+  request (`RR-01`). A review point is the same whatever you're comparing with, MTD or YTD: a note on `4061` made
+  while looking at budget shows against last month too.
 - **In the open review, type:**
 
   | Type | What it does |
   | --- | --- |
-  | `why 3` | The figures, what they're compared with, the last 13 months, and your note |
-  | `note 4 <text>` | Add what iLA can't know ("PBR needed extra security"). The finding counts as reviewed, and the note comes back when that line comes up again |
-  | `ok 1-5`, `ok all` | Reviewed: no action needed |
-  | `later 2` | Not yet: stays open |
-  | `act 6` | Marked acted on, with the command most likely to fix it (e.g. `/accrue --Oct 2026`, `/tag`) |
-  | `act 6 /accrue --Oct 2026` | Marked acted on, and runs that command now |
-  | `refresh` | Read Xero again; statuses and notes are kept |
-  | `done` (or `/cancel`) | Close the review; statuses and notes are kept |
+  | `note 4061 <text>` | Add a review note to a line (several notes per line are fine; each is stamped with who and when) |
+  | `signoff 4061 lab RR-01` | Sign off accounts, groups or requests. A group signs off every account in it |
+  | `reopen lab` | Back to Open, e.g. new information. Reopening an account reopens its group |
+  | `clear 4061` | Remove the notes on a line |
+  | `notes`, `notes all` | This month's notes; every month's |
+  | `vs lm` · `vs ly` · `vs budget` | Change the comparison |
+  | `mtd` · `ytd` | Month or year to date |
+  | `L1 rev cogs` · `L0` | GL accounts of groups; back to the group table |
+  | `refresh` | Read Xero again; notes and sign-offs are kept |
+  | `done` (or `/cancel`) | Close the review; notes and sign-offs are kept |
 
-- **Admin → Review → Review findings** lists every status and note by month.
+- **Signed-off rows are green**, with who and when. **Amber means the numbers have moved since sign-off**
+  (e.g. a late bill): the status shows by how much. Check it and sign off again. The Notes column on L0 counts the
+  notes on the group and its accounts; L1 shows them.
+- **Review requests** (Admin → Review → Review requests): write what you want iLA to look at, e.g. *"iLA, please look
+  at any revenue unassigned to any events."* Save, then **Trial run**: iLA reads Xero for the last 2 months (set in
+  Review settings, or per request), works out the check and shows its result on the page. Reword and trial run
+  again until it's right; then an admin clicks **Confirm & save**. `/review` then runs the confirmed check every
+  month and shows its table after the P&L table, in the same layout as the trial run. The AI is used only at the
+  trial run; the saved check is run by code. If part of a request can't be done (e.g. hours, rosters), the trial run
+  says so. Change the wording any time: the confirmed check keeps running until the new one is confirmed. Switch a
+  request off with *On*.
+- **`/status`** shows where the last full month's review stands: groups and review requests signed off, anything
+  changed since sign-off, and the number of notes.
+- **Admin → Review → Review findings** lists every note and sign-off by month, with its history.
 
 ### Month-end accruals
 
@@ -620,7 +635,9 @@ Nothing is written to Xero; a person imports the file.
 | `/_createInvoice` says there's no invoice set-up | Add one in admin → Organisation → Invoice set-ups. |
 | Figures look a few minutes old | Xero reads are cached for 5 minutes. |
 | `/reconcile` says an account has no reconciliation method | An admin sets it in Admin → Chart of accounts. |
-| `/review` raises too many findings | Raise the materiality in Admin → Review → Review settings, per check (e.g. over $5,000 or over 10%), or switch checks off. `ok all` clears the rest. |
+| `/review` puts an account in the wrong group | Set the group's codes and ranges in Admin → Review → Review settings (e.g. Labour `6300-6380`). |
+| A signed-off line in `/review` turned amber | Its amount changed after sign-off (e.g. a late bill or journal). Check it, then `signoff` it again. |
+| `/review` says a code isn't in the month | Only accounts with an amount in the month, last month, last year or budget can be referred to. |
 | `/review` says the month hasn't finished | It reviews whole months only; use the last full month (the default). |
 | A review request's trial run failed | The page says why. Reword the request (name the accounts, the dimension or the amount) and trial run again. |
 | `/accrue` says there's no accrual set-up | Admin → Accounting → Accruals: add the organisation's accrual account, then *Copy history from Xero, then scan*. |
@@ -657,6 +674,7 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 8 Nov 2026 | `/review` rebuilt: one P&L table by group (L0) with ratios, against last month, last year or budget, MTD or YTD; GL accounts per group (L1); notes, sign-off and reopen by account code, group or RR-01, with signed-off rows green and changes since sign-off amber. Materiality and iLA's readings removed for now. `/status` shows the review's progress. |
 | 7 Nov 2026 | Added `/review`: the month-end P&L review with the core checks C1–C8 (materiality per check in admin) and review requests (prompt → trial run → confirm), worked with `why`, `note`, `ok`, `later` and `act`. |
 | 25 Oct 2026 | Added `/accrue`: the month's proposed accruals by source with evidence; accept, adjust or reject each with a reason; `why`, `compare`, `build`. Reading bill PDFs (`read`) to place bills in their month (needs a reconnect for Xero's attachments permission). Accrual history now includes sales invoices. |
 | 24 Oct 2026 | `/reconcile`: the accrual account (e.g. 2000) takes its schedule from the Expectation Ledger's posted accrual lines for the month. |

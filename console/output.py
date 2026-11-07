@@ -18,9 +18,20 @@ def fmt_money(value):
     return f"({text})" if value < 0 else text
 
 
+class Points(Decimal):
+    """A movement in percentage points (1.1 = 1.1 points), for a ratio's row in a % column."""
+
+
+class Ratio(Decimal):
+    """A ratio (0.25 = 25%) in a money column, e.g. a P&L table's ratio rows; shown as a percentage."""
+
+
 def fmt_pct(value):
     if value is None:
         return ""
+    if isinstance(value, Points):
+        text = f"{abs(value):,.1f} pts"
+        return f"({text})" if value < 0 else text
     value = Decimal(value) * 100
     text = f"{abs(value):,.1f}%"
     return f"({text})" if value < 0 else text
@@ -31,6 +42,8 @@ def fmt_date(value):
 
 
 def fmt(value, kind):
+    if isinstance(value, (Points, Ratio)):
+        return fmt_pct(value)
     if kind == MONEY:
         return fmt_money(value)
     if kind == PCT:
@@ -55,10 +68,14 @@ class Table:
     title: str = ""
     # Indexes of rows to show as totals.
     total_rows: set = field(default_factory=set)
+    # Row index -> shading: "ok" (green, e.g. signed off) or "warn" (amber, e.g. changed since sign-off).
+    tones: dict = field(default_factory=dict)
 
-    def add(self, *cells, total=False):
+    def add(self, *cells, total=False, tone=""):
         if total:
             self.total_rows.add(len(self.rows))
+        if tone:
+            self.tones[len(self.rows)] = tone
         self.rows.append(list(cells))
 
     def to_json(self):
@@ -67,7 +84,8 @@ class Table:
             "columns": [{"label": c.label, "kind": c.kind} for c in self.columns],
             "rows": [{"cells": [fmt(v, c.kind) for v, c in zip(row, self.columns)],
                       "negative": [isinstance(v, Decimal) and v < 0 for v in row],
-                      "total": i in self.total_rows} for i, row in enumerate(self.rows)],
+                      "total": i in self.total_rows, "tone": self.tones.get(i, "")}
+                     for i, row in enumerate(self.rows)],
         }
 
 
@@ -192,11 +210,13 @@ def _xlsx(result, tables):
                 else:
                     values.append(v)
             sheet.append(values)
-            for cell, col in zip(sheet[sheet.max_row], table.columns):
-                if col.kind == MONEY:
-                    cell.number_format = "#,##0.00;(#,##0.00)"
-                elif col.kind == PCT:
+            for cell, col, v in zip(sheet[sheet.max_row], table.columns, row):
+                if isinstance(v, Points):
+                    cell.number_format = '0.0 "pts";(0.0 "pts")'
+                elif isinstance(v, Ratio) or col.kind == PCT:
                     cell.number_format = "0.0%;(0.0%)"
+                elif col.kind == MONEY:
+                    cell.number_format = "#,##0.00;(#,##0.00)"
                 elif col.kind == DATE:
                     cell.number_format = "d mmm yyyy"
                 elif col.kind == TEXT:

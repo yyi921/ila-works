@@ -1,4 +1,5 @@
-"""/review: the core P&L checks, working the findings, and review requests (trial run, confirm, run)."""
+"""/review: the P&L by group (L0) and GL accounts (L1), notes and sign-offs, and review requests (trial run,
+confirm, run)."""
 
 from datetime import date
 from decimal import Decimal
@@ -6,7 +7,7 @@ from decimal import Decimal
 import pytest
 from django.contrib.auth import get_user_model
 
-from console.output import Figures, Note, Table
+from console.output import Figures, Note, Points, Table
 from console.parser import parse
 from console.registry import CommandError, Context, lookup
 from console.tests.fake_xero import fake_source
@@ -65,35 +66,104 @@ def rows(table):
     return {row[1]: row for row in table.rows}
 
 
-def test_core_checks_default_to_last_full_month(org, user):
+def l0(result):
+    return rows(tables(result)["P&L by group"])
+
+
+def test_l0_by_group_against_last_month(org, user):
     result = say(org, user, "/review")
     assert result.title == "Review: September 2026"
-    found = tables(result)
-    # Sales 10,000 vs 9,900 last month: under $1,000, so C1 raises nothing for it.
-    assert "C1 Month vs last month (over $1,000)" not in found
-    assert not any(t.startswith("C2") for t in found)  # the fake's September 2025 is the same
-    c3 = rows(found["C3 Month vs budget (over $1,000)"])
-    assert c3["200 Sales"][4] == D("-2000.00")  # unfavourable
-    assert c3["477 Wages"][4] == D("-3000.00")  # nothing budgeted for September
-    assert "469 Rent" not in c3  # 1,000 is not over 1,000
-    c5 = tables(result)["C5 COGS % of revenue (over $1,000)"]
-    budget_row = next(r for r in c5.rows if r[1] == "COGS % vs budget")
-    assert budget_row[2] == D("0.4") and budget_row[3] == 0
+    assert "MTD · vs Last month (Aug 2026)" in result.subtitle
+    found = l0(result)
+    assert list(found) == ["Revenue", "Cost of sales", "Gross profit", "Other income", "Labour",
+                           "Other operating costs", "EBITDA", "Net profit", "Gross profit %", "COGS %", "Labour %",
+                           "EBITDA %", "Net profit %"]
+    # Ref, line, actual, compare, var $, var %, notes, status
+    assert found["Revenue"][:6] == ["rev", "Revenue", D("10000.00"), D("10000.00"), D("0.00"), D("0")]
+    assert found["Labour"][2] == D("3000.00") and found["Labour"][7] == "Open"
+    assert found["Other operating costs"][2] == D("1050.00")  # rent plus the 50.00 not on an account row
+    assert found["Net profit"][2] == D("2450.00")  # ties to Xero
+    assert found["Labour %"][2] == D("0.3") and found["Labour %"][4] is None
+    assert "reading" not in str(result.to_json())
     assert "Labour: 477" in notes(result)
-    assert "Nothing past materiality in C1" in notes(result)
 
 
-def test_materiality_and_switches_from_admin(org, user):
-    settings = ReviewSettings.for_organisation(org)
-    CoreCheck.objects.filter(settings=settings, code="C3").update(amount=D("2500"))
-    CoreCheck.objects.filter(settings=settings, code="C2").update(enabled=False)
-    CoreCheck.objects.filter(settings=settings, code="C5").update(amount=None, points=D("50"))
-    result = say(org, user, "/review --Sep 2026")
-    found = tables(result)
-    c3 = rows(found["C3 Month vs budget (over $2,500)"])
-    assert "477 Wages" in c3 and "200 Sales" not in c3
-    assert not any(t.startswith("C2") for t in found)
-    assert not any(t.startswith("C5") for t in found)  # 40 points is not over 50
+def test_switch_comparison_window_and_level(org, user):
+    say(org, user, "/review --Sep 2026")
+    found = l0(say(org, user, "vs ly"))
+    assert found["Revenue"][3:6] == [D("8000.00"), D("2000.00"), D("0.25")]
+    assert isinstance(found["Gross profit %"][5], Points) and found["Gross profit %"][5] == D("-2.5")  # 60.0% vs 62.5%
+    result = say(org, user, "ytd")
+    assert "YTD · vs Last year YTD (2025)" in result.subtitle
+    result = say(org, user, "vs budget")
+    assert "Budget YTD" in [c.label for c in tables(result)["P&L by group"].columns]
+    result = say(org, user, "L1 rev cost of sales")
+    assert list(tables(result)) == ["Revenue (rev) · GL accounts", "Cost of sales (cogs) · GL accounts"]
+    assert tables(result)["Revenue (rev) · GL accounts"].rows[0][:2] == ["200", "Sales"]
+    with pytest.raises(CommandError, match="last month doesn't mean"):
+        say(org, user, "vs lm")
+    result = say(org, user, "/review --lab --L1")
+    assert list(tables(result)) == ["Labour (lab) · GL accounts"]
+    with pytest.raises(CommandError, match="doesn't mean anything"):
+        say(org, user, "/review --ytd --vs lm")
+
+
+def test_notes_sign_off_reopen_and_changes(org, user):
+    say(org, user, "/review --Sep 2026")
+    say(org, user, "note 200 Expo moved to October")
+    say(org, user, "note rev Check the Expo deposit")
+    result = say(org, user, "signoff rev 477")
+    found = l0(result)
+    assert found["Revenue"][6] == 2 and found["Revenue"][7].startswith("✓ Signed off · finance")
+    assert tables(result)["P&L by group"].tones[0] == "ok"
+    assert figures(result)["Groups signed off"] == "2 of 5"  # revenue, and labour through its only account
+    point = ReviewFinding.objects.get(organisation=org, period_end=date(2026, 9, 30), key="200")
+    assert point.status == "signed_off" and point.signed_amount == D("10000.00") and point.signed_by == user
+    assert point.notes[0].startswith("Expo moved to October — finance ")
+
+    assert l0(say(org, user, "reopen 200"))["Revenue"][7] == "Open"
+
+    # A later refresh finds wages moved: the sign-off shows as changed until it's signed off again.
+    from console.models import ReviewSession
+
+    session = ReviewSession.objects.get(organisation=org, status="open")
+    for line in session.data["lines"]:
+        if line["code"] == "477":
+            line["values"]["cur"] = "3600.00"
+    session.save()
+    result = say(org, user, "L0")
+    assert l0(result)["Labour"][7] == "⚠ Changed since sign-off (+600.00)"
+    assert tables(result)["P&L by group"].tones[4] == "warn"
+    assert figures(result)["Changed since sign-off"] == "1"
+    assert l0(say(org, user, "signoff 477"))["Labour"][7].startswith("✓ Signed off")
+
+    assert [r[1] for r in say(org, user, "notes").tables()[0].rows] == ["200", "rev"]
+    with pytest.raises(CommandError, match="isn't an account code"):
+        say(org, user, "signoff 9999")
+    say(org, user, "clear 200")
+    assert len(say(org, user, "notes").tables()[0].rows) == 1
+
+    ctx = Context(org, user, source_factory=lambda _: fake_source(), today_override=TODAY)
+    review = tables(lookup("status").func(ctx, parse("/status")))["Month-end review: September 2026"]
+    assert ["Groups signed off", "1 of 5"] in review.rows  # 200 was reopened, so revenue isn't signed off
+    assert say(org, user, "done").title.startswith("Review closed")
+
+
+def test_old_findings_fold_into_review_points(org):
+    from importlib import import_module
+
+    from django.apps import apps
+
+    month = date(2026, 8, 31)
+    for key, status, note in (("C1:200", "noted", "Expo moved"), ("C3:200", "ok", "Expo moved"),
+                              ("C3:477", "noted", "Pay run late"), ("C6:last_month", "noted", "Ratio"),
+                              ("RR-01", "later", "")):
+        ReviewFinding.objects.create(organisation=org, period_end=month, key=key, subject=key, status=status,
+                                     note=note)
+    import_module("review.migrations.0002_review_points").fold_findings(apps, None)
+    points = {p.key: p for p in ReviewFinding.objects.filter(organisation=org)}
+    assert set(points) == {"200", "477"}
+    assert points["200"].note == "Expo moved" and points["200"].status == "open"
 
 
 def test_combined_materiality():
@@ -104,28 +174,6 @@ def test_combined_materiality():
     assert check.material(D("500"), D("12"))
     assert not CoreCheck(code="C1", amount=D("1000")).material(D("-1000"))
     assert CoreCheck(code="C1", amount=D("1000")).material(D("-1000.01"))
-
-
-def test_work_the_review_and_notes_come_back(org, user):
-    result = say(org, user, "/review --Aug 2026")
-    c3 = tables(result)["C3 Month vs budget (over $1,000)"]
-    sales = next(r for r in c3.rows if r[1] == "200 Sales")
-    number = sales[0]
-    say(org, user, f"note {number} Expo moved to September")
-    say(org, user, "ok 1")
-    result = say(org, user, f"why {number}")
-    assert "Expo moved" in notes(result)
-    assert figures(say(org, user, "refresh"))["Reviewed"] == "2"
-    finding = ReviewFinding.objects.get(organisation=org, period_end=date(2026, 8, 31), key="C3:200")
-    assert finding.status == "noted" and finding.updated_by == user
-
-    result = say(org, user, "/review --Sep 2026")
-    c3 = rows(tables(result)["C3 Month vs budget (over $1,000)"])
-    assert 'your note (aug 2026): "expo moved to september"' in c3["200 Sales"][5].lower()
-
-    result = say(org, user, "act 2")
-    assert "Next: /" in notes(result)
-    assert say(org, user, "done").title.startswith("Review closed")
 
 
 def test_whole_finished_months_only(org, user):
@@ -190,12 +238,14 @@ def test_trial_run_confirm_and_review(org, user, ledger, monkeypatch):
 
     review = say(org, user, "/review --Sep 2026")
     table = next(t for t in review.blocks if isinstance(t, Table) and "RR-01" in t.title)
-    assert "Revenue not assigned to an event" in table.title and "8,420.00" in table.title
+    assert table.title == "RR-01 Revenue not assigned to an event · Open"
     assert [c.label for c in table.columns][-2:] == ["Event", "Amount"]
     assert table.rows[0][2] == "INV-2" and table.rows[0][-1] == D("8420.00")
-    number = int(table.title.split(" ")[0])
-    result = say(org, user, f"act {number}")
-    assert "Next: /tag" in notes(result)
+    say(org, user, "note rr-1 Tag INV-2 to the Expo")
+    review = say(org, user, "signoff RR-01")
+    table = next(t for t in review.blocks if isinstance(t, Table) and "RR-01" in t.title)
+    assert "✓ Signed off" in table.title and "Notes: Tag INV-2 to the Expo" in table.title
+    assert figures(review)["Review requests signed off"] == "1 of 1"
 
 
 def test_editing_a_confirmed_request_keeps_the_old_check_running(org, user, ledger, monkeypatch):
@@ -252,8 +302,12 @@ def test_admin_pages(org, ledger, monkeypatch, client):
     assert request.status == RequestStatus.CONFIRMED and request.confirmed_by == admin_user
     settings = ReviewSettings.for_organisation(org)
     page = client.get(f"/admin/review/reviewsettings/{settings.pk}/change/").content.decode()
-    assert "C8 Net profit % of revenue" in page
+    assert "Labour accounts" in page and "C8 Net profit" not in page
+    point = ReviewFinding.objects.create(organisation=org, period_end=date(2026, 9, 30), key="200", subject="200",
+                                         note="Expo moved", history=[{"at": "2026-11-08T10:00", "by": "boss",
+                                                                      "what": "note", "note": "Expo moved"}])
     assert client.get("/admin/review/reviewfinding/").status_code == 200
+    assert "Expo moved" in client.get(f"/admin/review/reviewfinding/{point.pk}/change/").content.decode()
 
 
 def test_only_admins_confirm(org, ledger, monkeypatch, client, user):

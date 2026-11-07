@@ -19,7 +19,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/creditors` | `/ap` | Payables ageing by supplier (by days past due date). | `/creditors [--detail] [--top <n>] [>> file.xlsx]` |
 | `/bills` |  | Bills due in the next 7 days (or --due <days>), with overdue bills listed first. | `/bills [--due <days>] [--overdue] [>> file.xlsx]` |
 | `/accrue` |  | Month-end accrual review: proposed accruals by source with their evidence; accept, adjust or reject each, then build the journal file. | `/accrue [--<period>] [--read \| --refresh]` |
-| `/review` |  | Month-end P&L review: the core checks (vs last month, last year and budget; YTD; COGS, labour, EBITDA and net profit %) and your review requests, as one list of findings to work through. | `/review [--<period>]` |
+| `/review` |  | Month-end P&L review: the P&L by group with GP, COGS, labour, EBITDA and net profit % against last month, last year or budget (MTD or YTD), GL accounts per group (L1), and your review requests; leave notes and sign off by account code, group or RR-01. | `/review [--<period>] [--vs lm\|ly\|budget] [--mtd\|--ytd] [--L0\|--L1] [--<group> ...] [--refresh]` |
 | `/reconcile` | `/recon`, `/rec` | Month-end balance sheet reconciliation: each account's Xero balance against its support, with reconciling items, schedules and preparer/reviewer sign-off. | `/reconcile [<account>] [--<period>] [<< schedule.csv] \| /reconcile --bank \| /reconcile --template` |
 | `/compare` |  | Compare bills, invoices or a P&L measure month by month to spot unusual, new or missing amounts. | `/compare --bill\|--invoice [<number>] [--supplier\|--customer <name or code>] [--account <code or name>] [--by account] [--<period>] [--detail] [--min <amount>]   or   /compare --revenue\|--cos\|--gp\|--expenses\|--profit [--<period>]` |
 | `/inv` | `/invoice`, `/bill` | Show one invoice, bill or credit note by its number. | `/inv <number>` |
@@ -196,20 +196,28 @@ In an open review, type `accept <lines|all|bills|estimates>`, `adjust <line> <am
 
 ### /review
 
-Month-end P&L review: the core checks (vs last month, last year and budget; YTD; COGS, labour, EBITDA and net profit %) and your review requests, as one list of findings to work through.
+Month-end P&L review: the P&L by group with GP, COGS, labour, EBITDA and net profit % against last month, last year or budget (MTD or YTD), GL accounts per group (L1), and your review requests; leave notes and sign off by account code, group or RR-01.
 
-Usage: `/review [--<period>]`
+Usage: `/review [--<period>] [--vs lm|ly|budget] [--mtd|--ytd] [--L0|--L1] [--<group> ...] [--refresh]`
 
 | Parameter | Meaning |
 | --- | --- |
 | `--<period>` | One whole month, e.g. Oct 2026; default the last full month |
+| `--vs lm\|ly\|budget` | Compare with last month (default), the same period last year, or budget |
+| `--mtd / --ytd` | The month (default) or the year to date; YTD compares with last year or budget |
+| `--L0 / --L1` | L0: one table by group (default). L1: the GL accounts in each group |
+| `--<group>` | rev, cogs, oth, lab, opx, da, int or tax: that group's GL accounts (L1) |
+| `--refresh` | Read the figures from Xero again (otherwise the open review's figures are reused) |
 
 Examples:
 
 - `/review`
-- `/review --Oct 2026`
+- `/review --Oct 2026 --vs budget`
+- `/review --ytd --vs ly`
+- `/review --rev --L1`
+- `/review --lab --cogs`
 
-In an open review, type `why <n>`, `note <n> <text>`, `ok <n|n-m|all>`, `later <n>`, `act <n> [/command]`, `refresh` or `done`. Checks, materiality, ratio accounts and review requests are set in Admin → Review.
+In an open review, refer to lines by account code (`4061`, `6300-6380`), group (`rev`, `cogs`, `oth`, `lab`, `opx`, `da`, `int`, `tax`) or request (`RR-01`) and type `note <ref> <text>`, `signoff <refs>`, `reopen <refs>`, `clear <ref>`, `notes [all]`, `vs lm|ly|budget`, `mtd`, `ytd`, `L1 [groups]`, `L0`, `refresh` or `done`. Groups and review requests are set in Admin → Review.
 
 ### /reconcile
 

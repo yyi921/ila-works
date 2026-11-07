@@ -1,11 +1,11 @@
 <style>
   :root {
     --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2dc; --accent: #1f5f8b;
-    --neg: #b3261e; --warn-bg: #fff6e0; --warn: #7a5300; --total: #f0efe9; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    --neg: #b3261e; --warn-bg: #fff6e0; --warn: #7a5300; --total: #f0efe9; --ok-bg: #e7f4e8; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #161615; --panel: #1f1f1d; --text: #ecebe6; --muted: #9a9993; --line: #34332f; --accent: #7fb6dc;
-            --neg: #f2857c; --warn-bg: #3a2f12; --warn: #f0c96a; --total: #292825; color-scheme: dark; }
+            --neg: #f2857c; --warn-bg: #3a2f12; --warn: #f0c96a; --total: #292825; --ok-bg: #1c3320; color-scheme: dark; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -40,6 +40,8 @@
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
   td.num, th.num { text-align: right; }
   tr.total td { font-weight: 600; background: var(--total); }
+  tr.tone-ok td { background: var(--ok-bg); }
+  tr.tone-warn td { background: var(--warn-bg); }
   .neg { color: var(--neg); }
   .note { color: var(--muted); margin: 8px 0 0; font-size: 13px; }
   .note.warning { background: var(--warn-bg); color: var(--warn); padding: 6px 10px; border-radius: 6px; }
@@ -64,7 +66,7 @@
   /* Incognito: a crisp white-on-black terminal. */
   html.incognito {
     --bg: #0c0c0c; --panel: #0c0c0c; --text: #f2f2f2; --muted: #a0a0a0; --line: #5a5a5a; --accent: #ffffff;
-    --neg: #ff6b6b; --warn-bg: #f2f2f2; --warn: #0c0c0c; --total: #1e1e1e;
+    --neg: #ff6b6b; --warn-bg: #f2f2f2; --warn: #0c0c0c; --total: #1e1e1e; --ok-bg: #12301a;
     --mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, monospace; color-scheme: dark;
   }
   html.incognito body { font: 15px/1.5 var(--mono); -webkit-font-smoothing: antialiased; }
@@ -81,6 +83,7 @@
   html.incognito .figure .label, html.incognito .figure .detail, html.incognito th, html.incognito .note { font-size: 12px; }
   html.incognito .figure .value { font-size: 22px; }
   html.incognito th, html.incognito td { border-bottom: 1px dotted var(--line); padding: 3px 10px; }
+  html.incognito tr.tone-warn td { background: none; color: #f0c96a; }
   html.incognito tr.total td { border-top: 1px solid var(--text); border-bottom: 3px double var(--text); }
   html.incognito .table-title { font-weight: normal; text-transform: uppercase; letter-spacing: .5px; margin-top: 18px; }
   html.incognito .table-title::before { content: "── "; color: var(--muted); }

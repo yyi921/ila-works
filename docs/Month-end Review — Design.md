@@ -69,32 +69,28 @@ The lock takes a snapshot: Xero's TB, the layer, the decisions, and who locked i
 
 ## 5. `/review`: core P&L checks + review requests
 
-For now `/review` covers the **P&L**. The balance sheet comes later on the same design. `/review` = the core checks + every confirmed review request, as one numbered list of findings. With no period it looks at the **last full month**.
+For now `/review` covers the **P&L**. The balance sheet comes later on the same design. `/review` = the P&L by group (with GL detail on request) + every confirmed review request. With no period it looks at the **last full month**.
 
-### Part A: core P&L checks (on by default)
+### Part A: the P&L by group (L0) and GL accounts (L1)
 
-| # | Check | Compared with | Shown as |
-|---|---|---|---|
-| C1 | Month: every P&L line and subtotal | Last month | $ and % |
-| C2 | Month: every P&L line and subtotal | Same month last year | $ and % |
-| C3 | Month: every P&L line and subtotal | Budget | $ and % |
-| C4 | Year to date: every line and subtotal | YTD budget | $ and % |
-| C5 | COGS % of revenue | Last month, last year, budget | points |
-| C6 | Labour % of revenue | Last month, last year, budget | points |
-| C7 | EBITDA % of revenue | Last month, last year, budget | points |
-| C8 | Net profit % of revenue | Last month, last year, budget | points |
+*Revised 8 November 2026 after the first test: the C1–C8 findings list and iLA's readings were too much. They are
+replaced by one table; materiality is off for now (the settings are kept for later).*
 
-- **Setting up each check (admin):**
-  - Each check has an on/off switch and a materiality the user sets.
-  - **The default materiality is any movement over $1,000 either way.** Each check can instead use an amount, a %, points (ratios) or a combination ("over $1,000 and over 5%", "over $5,000 or over 10%").
-  - Below materiality nothing is raised.
-- **EBITDA** = net profit + interest + tax + depreciation and amortisation. Which accounts count as COGS, labour, interest, tax, depreciation and amortisation comes from Xero's account types and can be changed in admin. For TECC, labour = 6300–6380.
-- **iLA explains each variance** from what it can see:
-  - the bill or journal behind it
-  - the overlay journals in the layer
-  - events this month against last year
-  - the user's notes on the same line in earlier months
-- **Ad-hoc events are told to iLA once**, as a note. The variance then counts as explained, both this month and when this month is "last year" next year.
+- **L0 (default):** one table, the P&L by group: Revenue (`rev`), Cost of sales (`cogs`), Gross profit, Other income
+  (`oth`), Labour (`lab`), Other operating costs (`opx`), EBITDA, Depreciation & amortisation (`da`), Interest
+  (`int`), Income tax (`tax`), Net profit; then Gross profit %, COGS %, Labour %, EBITDA % and Net profit % of
+  revenue. Columns: Ref, Line, Actual, comparison, Var $, Var % (points for ratios), Notes, Status. No
+  favourable/unfavourable wording and no commentary.
+- **Selectors:** compare with last month (default), the same month last year or budget; month or year to date (YTD
+  compares with last year or budget only).
+- **L1:** `/review --rev --L1` (or `--rev`, or `L1 rev` in the open review): the group's GL accounts with the same
+  columns. No deeper level.
+- **Groups** come from Review settings: cost of sales, labour, D&A, interest and tax as account codes and ranges
+  (iLA's defaults from Xero's account types and names when blank). Cost accounts in none of them are Other operating
+  costs. Net profit not on any account row (e.g. currency gains and losses) sits in Other operating costs so Net
+  profit ties to Xero.
+- **EBITDA** = net profit + interest + tax + depreciation and amortisation.
+- **Ad-hoc events are told to iLA once**, as a note.
 
 ### Part B: review requests (admin)
 
@@ -131,13 +127,23 @@ Further rules:
 
 ### Working the review
 
-    why 3                 the figures, what it's compared with and the evidence
-    note 4 <text>         add what iLA can't know
-    ok 1                  reviewed: no action needed
-    act 6                 open the action that fixes it
-    later 2               not yet: stays open
+A review point belongs to a GL account, a group or a review request, **whatever it was compared with**: reviewing
+4061 against last month, last year or budget is one test. So lines are referred to by account code (`4061`, ranges
+`6300-6380`), group (`rev`, `lab` …) or `RR-01`, which stay the same at L0 and L1, MTD and YTD:
 
-A finding is reviewed once it's OK'd, noted or acted on. Notes are kept, reused when the same thing comes up again, and become the commentary in the management pack. **The management pack is the landing view by default** (Xero now + To post + Expected). Admin can change that per organisation.
+    note 4061 <text>          a review note (several per line, stamped with who and when)
+    signoff 4061 lab RR-01    sign off; a group signs off every account in it
+    reopen lab                back to Open when new information comes in
+    clear 4061 · notes [all]
+
+- **Signed-off rows are green** with who and when. A sign-off keeps the month's actual at the time; **if the amount
+  later changes, the row turns amber** ("changed since sign-off", by how much) until it's signed off again.
+- A group is signed off when it's signed off itself or all its accounts are; reopening an account reopens its group.
+- `/status` shows the last full month's progress: groups and review requests signed off, changed since sign-off,
+  notes.
+- Notes and sign-offs are kept per month (Admin → Review → Review findings, with history). Notes become the
+  commentary in the management pack. **The management pack is the landing view by default** (Xero now + To post +
+  Expected). Admin can change that per organisation.
 
 ## 6. Actions
 

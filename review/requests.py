@@ -25,7 +25,6 @@ from core.models import BankTransaction, Dimension, DimensionValue, Document
 from core.tagging import split_amount
 from xero.sync import KINDS, copy_period
 
-from .checks import Finding
 from .models import RequestStatus, ReviewRequest, ReviewSettings
 
 ZERO = Decimal("0")
@@ -495,29 +494,22 @@ def confirm(request, user):
 
 
 def run_confirmed(organisation, src, month, fy, notes):
-    """Findings for every confirmed review request that's on, in number order: one per request with rows. The
-    month's transactions are copied from Xero first (once)."""
+    """The result of every confirmed review request that's on, in number order, as dicts (code, title, columns,
+    rows, count, total). The month's transactions are copied from Xero first (once)."""
     requests = [r for r in ReviewRequest.objects.filter(organisation=organisation) if r.runs]
     if not requests:
         return []
     copy_period(organisation, src, KINDS, month.start, month.end)
-    found, quiet = [], []
+    found = []
     for r in requests:
         try:
             result = run_spec(organisation, r.confirmed_spec, [month])
         except (SpecError, KeyError) as exc:
             notes.append(f"{r.code} couldn't run: {exc}. Trial run it again in Admin > Review.")
             continue
-        if not result["rows"]:
-            quiet.append(r.code)
-            continue
-        total = Decimal(result["total"])
-        reading = f"{result['count']} row(s)" + (f", {total:,.2f}" if total else "")
-        found.append(Finding(r.code, r.code, r.code, r.title or r.confirmed_spec.get("title", ""), total, None, None,
-                             reading=reading, table={"columns": result["columns"], "rows": result["rows"]},
-                             action=r.confirmed_spec.get("action", "")))
-    if quiet:
-        notes.append(f"Nothing to raise in {', '.join(quiet)}.")
+        found.append({"code": r.code, "title": r.title or r.confirmed_spec.get("title", ""),
+                      "columns": result["columns"], "rows": result["rows"], "count": result["count"],
+                      "total": str(result["total"] or 0)})
     return found
 
 
