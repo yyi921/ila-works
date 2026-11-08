@@ -40,8 +40,8 @@ HOW_TO = {
               "and net profit %, then your review requests. Switch with vs lm|ly|budget, mtd, ytd; L1 rev (or "
               "/review --rev) opens a group's GL accounts. Refer to lines by account code, group (rev, cogs, oth, "
               "lab, opx, da, int, tax) or RR-01: note 4061 <text>, signoff 4061 lab RR-01, reopen lab, clear 4061, "
-              "notes. Signed-off rows are green; amber means the numbers moved since. Groups and review requests "
-              "are set in Admin > Review.",
+              "notes. Signed-off rows are green; amber means the numbers moved since. Groups, ratio formulas (e.g. "
+              "5110-5330 / 4005 + 4810) and review requests are set in Admin > Review.",
     "inv": "Open one invoice, bill or credit note by its number, with lines, payments and amount due.",
     "find": "Search contacts and invoice or bill numbers and references, e.g. /find smith.",
     "dim": "See what you can tag by before tagging: Xero's tracking categories (Xero allows 2 active and 4 in all) "

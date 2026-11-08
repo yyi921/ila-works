@@ -4,7 +4,7 @@ A practical guide to the iLA console: what each command is for, how to type it, 
 full list of parameters with examples, see [Command reference](Command%20reference.md), or type `/help <command>` in
 the console.
 
-_Last updated: 8 November 2026 (`/review` rebuilt: the P&L by group with GL detail, notes and sign-off by account code, group or review request)._
+_Last updated: 8 November 2026 (`/review` rebuilt: the P&L by group with GL detail, notes and sign-off by account code, group or review request; ratios defined in Review settings)._
 
 ---
 
@@ -187,7 +187,7 @@ Quarters and financial years follow the year end set in Xero.
   | | EBITDA |
   | `da` · `int` · `tax` | Depreciation & amortisation · Interest · Income tax |
   | | Net profit (ties to Xero) |
-  | | Gross profit %, COGS %, Labour %, EBITDA %, Net profit % (of revenue) |
+  | | The ratios: by default Gross profit %, COGS %, Labour %, EBITDA %, Net profit % (of revenue) |
 
   Columns: Actual, the comparison, **Var $** (actual less comparison) and **Var %**; ratios move in points (pts).
   No materiality and no commentary: every movement is shown.
@@ -198,6 +198,22 @@ Quarters and financial years follow the year end set in Xero.
 - **The groups** come from Admin → Review → Review settings: Cost of sales (default every Cost of sales account),
   Labour (default accounts named wages, salaries, super, payroll, leave, Workcover or staff), Depreciation &
   amortisation, Interest and Income tax, as codes and ranges, e.g. `6300-6380`. `/review` lists what it used.
+- **The ratios** are set in Admin → Review → Review settings → *Review ratios*: a name and a formula
+  `numerator / denominator`. Each side is a sum of account codes (`4005`, `GL4005`), ranges (`5110-5330`; `-` always
+  means a range), groups (`rev`, `cogs`, `oth`, `lab`, `opx`, `da`, `int`, `tax`) and subtotals (`gp`, `ebitda`,
+  `np`), joined with `+` or a comma; `less` takes a term away. Amounts are as the P&L shows them (income and costs
+  both positive). Examples:
+
+  | Name | Formula |
+  | --- | --- |
+  | COGS % | `5110-5330 / 4005 + 4810 + 4830` |
+  | Labour % | `lab / rev` (the default) |
+  | Event staff recovery % | `4061 / 6345` |
+  | Net revenue margin % | `rev less cogs less 6345 / rev` |
+
+  Every organisation starts with gross profit, COGS, labour, EBITDA and net profit % of revenue, worked out from the
+  groups, so nothing changes until you edit them. Add, reorder (*Order*), switch off (*On*) or delete ratios; codes
+  not in the chart of accounts are refused when you save.
 - **Refer to a line** by its account code (`4061`, or a range `6300-6380`), its group (`rev`, `lab` …) or a review
   request (`RR-01`). A review point is the same whatever you're comparing with, MTD or YTD: a note on `4061` made
   while looking at budget shows against last month too.
@@ -635,6 +651,7 @@ Nothing is written to Xero; a person imports the file.
 | `/_createInvoice` says there's no invoice set-up | Add one in admin → Organisation → Invoice set-ups. |
 | Figures look a few minutes old | Xero reads are cached for 5 minutes. |
 | `/reconcile` says an account has no reconciliation method | An admin sets it in Admin → Chart of accounts. |
+| A ratio formula won't save | Use one `/`; `-` only between two codes (a range); `less` to take away; codes must be in the chart of accounts. |
 | `/review` puts an account in the wrong group | Set the group's codes and ranges in Admin → Review → Review settings (e.g. Labour `6300-6380`). |
 | A signed-off line in `/review` turned amber | Its amount changed after sign-off (e.g. a late bill or journal). Check it, then `signoff` it again. |
 | `/review` says a code isn't in the month | Only accounts with an amount in the month, last month, last year or budget can be referred to. |
@@ -674,6 +691,7 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 8 Nov 2026 | `/review` ratios are defined in Admin → Review → Review settings as formulas of account codes, ranges and groups (e.g. `5110-5330 / 4005 + 4810 + 4830`); the defaults give the same figures as before. |
 | 8 Nov 2026 | `/review` rebuilt: one P&L table by group (L0) with ratios, against last month, last year or budget, MTD or YTD; GL accounts per group (L1); notes, sign-off and reopen by account code, group or RR-01, with signed-off rows green and changes since sign-off amber. Materiality and iLA's readings removed for now. `/status` shows the review's progress. |
 | 7 Nov 2026 | Added `/review`: the month-end P&L review with the core checks C1–C8 (materiality per check in admin) and review requests (prompt → trial run → confirm), worked with `why`, `note`, `ok`, `later` and `act`. |
 | 25 Oct 2026 | Added `/accrue`: the month's proposed accruals by source with evidence; accept, adjust or reject each with a reason; `why`, `compare`, `build`. Reading bill PDFs (`read`) to place bills in their month (needs a reconnect for Xero's attachments permission). Accrual history now includes sales invoices. |

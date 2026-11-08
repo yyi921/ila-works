@@ -90,6 +90,7 @@ replaced by one table; materiality is off for now (the settings are kept for lat
   costs. Net profit not on any account row (e.g. currency gains and losses) sits in Other operating costs so Net
   profit ties to Xero.
 - **EBITDA** = net profit + interest + tax + depreciation and amortisation.
+- **Ratios are defined per organisation** in Review settings as `numerator / denominator` formulas of account codes, ranges, groups and subtotals, e.g. COGS % = `5110-5330 / 4005 + 4810 + 4830`. The defaults (gp, cogs, lab, ebitda, np over rev) give the figures above until edited; ratios can be added, switched off or deleted.
 - **Ad-hoc events are told to iLA once**, as a note.
 
 ### Part B: review requests (admin)

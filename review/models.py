@@ -15,6 +15,8 @@ from django.utils import timezone
 
 from core.models import TenantModel
 
+from . import ratios
+
 MONEY = {"max_digits": 19, "decimal_places": 2}
 
 
@@ -57,12 +59,54 @@ class ReviewSettings(TenantModel):
 
     @classmethod
     def for_organisation(cls, organisation):
-        """The organisation's settings and its eight core checks, created with the defaults the first time."""
-        obj, _ = cls.objects.get_or_create(organisation=organisation)
+        """The organisation's settings, its eight core checks and (the first time) the default ratios."""
+        obj, created = cls.objects.get_or_create(organisation=organisation)
         have = set(obj.checks.values_list("code", flat=True))
         CoreCheck.objects.bulk_create([CoreCheck(organisation=organisation, settings=obj, code=code)
                                        for code in CHECKS if code not in have])
+        if created:
+            ReviewRatio.objects.bulk_create([
+                ReviewRatio(organisation=organisation, settings=obj, name=name, formula=formula, order=i)
+                for i, (name, formula) in enumerate(ratios.DEFAULTS, 1)])
         return obj
+
+
+class ReviewRatio(TenantModel):
+    """A ratio shown under the P&L in /review: numerator / denominator, each a sum of account codes, ranges and
+    groups (see review.ratios). Every organisation starts with gross profit, COGS, labour, EBITDA and net profit % of
+    revenue, from the review's groups; edit, add or delete them."""
+
+    settings = models.ForeignKey(ReviewSettings, on_delete=models.CASCADE, related_name="ratios")
+    name = models.CharField(max_length=60)
+    formula = models.CharField(max_length=255, help_text=(
+        "numerator / denominator, e.g. 5110-5330 / 4005 + 4810 + 4830. Terms: account codes, ranges (5110-5330), "
+        "groups (rev, cogs, oth, lab, opx, da, int, tax) and gp, ebitda, np; join with + or a comma, take away with "
+        "less."))
+    order = models.PositiveSmallIntegerField(default=0)
+    enabled = models.BooleanField("on", default=True)
+
+    class Meta(TenantModel.Meta):
+        ordering = ["order", "id"]
+
+    def __str__(self):
+        return f"{self.name} = {self.formula}"
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        from core.models import Account
+
+        try:
+            named = ratios.codes(self.formula)
+        except ratios.FormulaError as exc:
+            raise ValidationError({"formula": str(exc)}) from None
+        chart = [c.upper() for c in Account.objects.filter(organisation_id=self.organisation_id)
+                 .exclude(code="").values_list("code", flat=True)]
+        if not chart:
+            return
+        missing = [t for t in named if not any(c == t or ("-" in t and ratios._in_range(c, t)) for c in chart)]
+        if missing:
+            raise ValidationError({"formula": f"Not in the chart of accounts: {', '.join(missing)}."})
 
 
 # code -> (name, kind, compared with). Kinds: "lines" (every P&L line and subtotal), "ratio".

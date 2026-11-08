@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 from django.utils import timezone
 
 from review import checks as engine
+from review import ratios
 from review.models import FindingStatus, ReviewFinding, ReviewSettings
 
 from .models import ReviewSession
@@ -475,8 +476,10 @@ def show(ctx, session, *, intro=""):
     for text in data.get("notes", []):
         result.add(Note(text, "warning"))
     if view["level"] == 0 and data.get("groups"):
-        result.add(Note("Groups: " + "; ".join(data["groups"]) + ". Change them in Admin > Review > Review "
-                                                                 "settings."))
+        formulas = [f"{r.name} = {r.formula}" for r in
+                    ReviewSettings.for_organisation(session.organisation).ratios.filter(enabled=True)]
+        result.add(Note("Groups: " + "; ".join(data["groups"]) + ". Ratios: " + "; ".join(formulas)
+                        + ". Change them in Admin > Review > Review settings."))
     result.add(Note(HELP, "warning"))
     return result
 
@@ -510,10 +513,14 @@ def _l0(session, view, lines, points):
     total_row("ebitda", "EBITDA")
     group_rows("da", "int", "tax")
     total_row("np", "Net profit")
-    for label, key in engine.RATIOS.items():
-        a, b = engine.ratio(now, key), engine.ratio(then, key)
+    for r in ReviewSettings.for_organisation(session.organisation).ratios.filter(enabled=True):
+        try:
+            a, b = ratios.value(r.formula, lines, now, actual), ratios.value(r.formula, lines, then, compare)
+        except ratios.FormulaError:
+            table.add("", r.name, None, None, None, None, None, "Formula needs fixing in Review settings")
+            continue
         moved = Points(((a - b) * 100).quantize(Decimal("0.1"))) if a is not None and b is not None else None
-        table.add("", label, Ratio(a) if a is not None else None, Ratio(b) if b is not None else None, None, moved,
+        table.add("", r.name, Ratio(a) if a is not None else None, Ratio(b) if b is not None else None, None, moved,
                   None, "")
     return table
 

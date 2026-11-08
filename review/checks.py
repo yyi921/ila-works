@@ -199,11 +199,3 @@ def totals(lines, column):
     out["ebitda"] = out["gp"] + out["oth"] - out["lab"] - out["opx"]
     out["np"] = out["ebitda"] - out["da"] - out["int"] - out["tax"]
     return out
-
-
-# Ratio label -> its numerator in totals(); every ratio is of revenue.
-RATIOS = {"Gross profit %": "gp", "COGS %": "cogs", "Labour %": "lab", "EBITDA %": "ebitda", "Net profit %": "np"}
-
-
-def ratio(total, key):
-    return total[key] / total["rev"] if total["rev"] else None
