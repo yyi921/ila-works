@@ -302,7 +302,7 @@ def test_admin_pages(org, ledger, monkeypatch, client):
     assert request.status == RequestStatus.CONFIRMED and request.confirmed_by == admin_user
     settings = ReviewSettings.for_organisation(org)
     page = client.get(f"/admin/review/reviewsettings/{settings.pk}/change/").content.decode()
-    assert "Labour accounts" in page and "C8 Net profit" not in page
+    assert "Labour accounts" in page and "C8 Net profit" not in page and "cogs / rev" in page
     point = ReviewFinding.objects.create(organisation=org, period_end=date(2026, 9, 30), key="200", subject="200",
                                          note="Expo moved", history=[{"at": "2026-11-08T10:00", "by": "boss",
                                                                       "what": "note", "note": "Expo moved"}])
@@ -327,3 +327,77 @@ def test_only_admins_confirm(org, ledger, monkeypatch, client, user):
     assert response.status_code == 302
     request.refresh_from_db()
     assert request.status == RequestStatus.TRIAL
+
+
+# --- Ratios ----------------------------------------------------------------------------------------------------
+
+def test_ratio_formulas_parse():
+    from review.ratios import FormulaError, parse
+
+    top, bottom = parse("Sum of GL5110 - GL 5330 / (GL 4005 + GL4810, 4830)")
+    assert top == [(1, "range", "5110-5330")]
+    assert bottom == [(1, "code", "4005"), (1, "code", "4810"), (1, "code", "4830")]
+    assert parse("rev less cogs minus 5110 / rev")[0] == [(1, "group", "rev"), (-1, "group", "cogs"),
+                                                          (-1, "code", "5110")]
+    for bad, message in (("lab", "one /"), ("lab / rev / 4", "one /"), ("rev - cogs / rev", "write less"),
+                         ("lab + / rev", "empty term"), ("wages / rev", "isn't an account code")):
+        with pytest.raises(FormulaError, match=message):
+            parse(bad)
+
+
+def test_custom_ratios_in_review(org, user):
+    from review.models import ReviewRatio
+
+    settings = ReviewSettings.for_organisation(org)
+    assert [r.formula for r in settings.ratios.all()] == ["gp / rev", "cogs / rev", "lab / rev", "ebitda / rev",
+                                                          "np / rev"]
+    ReviewRatio.objects.filter(settings=settings, name="COGS %").update(formula="310 / 200 + 260")
+    ReviewRatio.objects.filter(settings=settings, name="EBITDA %").update(enabled=False)
+    ReviewRatio.objects.create(organisation=org, settings=settings, name="Rent and wages %",
+                               formula="GL469 - GL477 / rev", order=9)
+    found = l0(say(org, user, "/review --Sep 2026"))
+    assert found["COGS %"][2] == D("4000") / D("10500")
+    assert "EBITDA %" not in found
+    assert found["Rent and wages %"][2] == D("0.4")  # 469 and 477: 1,000 + 3,000 over 10,000
+    assert "COGS % = 310 / 200 + 260" in notes(say(org, user, "L0"))
+
+
+def test_ratio_codes_checked_against_the_chart(org, ledger):
+    from django.core.exceptions import ValidationError
+
+    from review.models import ReviewRatio
+
+    settings = ReviewSettings.for_organisation(org)
+    ratio = ReviewRatio(organisation=org, settings=settings, name="X", formula="999 / 200")
+    with pytest.raises(ValidationError, match="Not in the chart of accounts: 999"):
+        ratio.full_clean()
+    ratio.formula = "100-299 / 200"
+    ratio.full_clean()
+    ratio.formula = "200 / "
+    with pytest.raises(ValidationError, match="empty term"):
+        ratio.full_clean()
+
+
+def test_edit_ratios_in_admin(org, ledger, client):
+    from review.models import ReviewRatio
+
+    client.force_login(get_user_model().objects.create_superuser("boss", password="pw"))
+    settings = ReviewSettings.for_organisation(org)
+    existing = list(settings.ratios.all())
+    form = {"organisation": org.pk, "trial_months": "2", "pack_view": "landing",
+            "ratios-TOTAL_FORMS": str(len(existing) + 1), "ratios-INITIAL_FORMS": str(len(existing)),
+            "ratios-MIN_NUM_FORMS": "0", "ratios-MAX_NUM_FORMS": "1000"}
+    for i, r in enumerate(existing):
+        form |= {f"ratios-{i}-id": r.pk, f"ratios-{i}-settings": settings.pk, f"ratios-{i}-order": r.order,
+                 f"ratios-{i}-name": r.name, f"ratios-{i}-formula": r.formula, f"ratios-{i}-enabled": "on"}
+    new = len(existing)
+    form |= {f"ratios-1-formula": "GL200 / 200", f"ratios-{new}-settings": settings.pk, f"ratios-{new}-order": "9",
+             f"ratios-{new}-name": "Sales share %", f"ratios-{new}-formula": "200 / rev", f"ratios-{new}-enabled": "on"}
+    url = f"/admin/review/reviewsettings/{settings.pk}/change/"
+    response = client.post(url, form)
+    assert response.status_code == 302, response.content.decode()[:3000]
+    assert ReviewRatio.objects.get(settings=settings, name="COGS %").formula == "GL200 / 200"
+    assert ReviewRatio.objects.get(settings=settings, name="Sales share %").organisation == org
+    form[f"ratios-{new}-formula"] = "999 / rev"
+    form[f"ratios-{new}-name"] = "Bad"
+    assert "Not in the chart of accounts: 999" in client.post(url, form).content.decode()

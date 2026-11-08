@@ -8,7 +8,8 @@ from django.utils.html import format_html, format_html_join
 
 from accounting import jobs
 
-from .models import RequestStatus, ReviewFinding, ReviewRequest, ReviewSettings
+from . import ratios
+from .models import RequestStatus, ReviewFinding, ReviewRatio, ReviewRequest, ReviewSettings
 from .requests import SpecError, confirm, describe, trial_run
 
 SOURCE_FIELDS = ("source_system", "source_id", "source_updated_at", "source_hash")
@@ -18,14 +19,52 @@ def can_confirm(user):
     return user.is_superuser or user.has_perm("review.confirm_reviewrequest")
 
 
+class ReviewRatioInline(admin.TabularInline):
+    """The ratios under the P&L in /review, in order. Formulas are numerator / denominator, e.g.
+    5110-5330 / 4005 + 4810 + 4830 or lab / rev."""
+
+    model = ReviewRatio
+    fields = ("order", "name", "formula", "enabled")
+    extra = 1
+
+    def get_formset(self, request, obj=None, **kwargs):
+        formset = super().get_formset(request, obj, **kwargs)
+        organisation = obj.organisation if obj else None
+
+        class Formset(formset):
+            def _construct_form(self, i, **kwargs):
+                form = super()._construct_form(i, **kwargs)
+                if organisation is not None:
+                    form.instance.organisation = organisation  # so clean() checks codes against its chart
+                return form
+
+        return Formset
+
+
 @admin.register(ReviewSettings)
 class ReviewSettingsAdmin(admin.ModelAdmin):
     """Which accounts make up Cost of sales, Labour, Depreciation & amortisation, Interest and Income tax in /review
-    (and so the ratios). Cost accounts in none of them are Other operating costs."""
+    (cost accounts in none of them are Other operating costs), and the ratios under the P&L. New settings start with
+    the default ratios (gross profit, COGS, labour, EBITDA and net profit % of revenue)."""
 
     list_display = ("organisation", "labour_accounts", "trial_months", "pack_view")
     fields = ("organisation", "cogs_accounts", "labour_accounts", "interest_accounts", "tax_accounts",
               "depreciation_accounts", "trial_months", "pack_view")
+    inlines = [ReviewRatioInline]
+
+    def save_formset(self, request, form, formset, change):
+        for item in formset.save(commit=False):
+            item.organisation = form.instance.organisation
+            item.save()
+        for item in formset.deleted_objects:
+            item.delete()
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        if not change and not form.instance.ratios.exists():
+            ReviewRatio.objects.bulk_create([
+                ReviewRatio(organisation=form.instance.organisation, settings=form.instance, name=name,
+                            formula=formula, order=i) for i, (name, formula) in enumerate(ratios.DEFAULTS, 1)])
 
 
 @admin.register(ReviewRequest)
