@@ -51,24 +51,28 @@ On-costs on the run total: payroll tax **4.95%** (6335), workcover **1.711%** (6
 
 **Cost accounts.** One row per payroll cost account:
 
-| Cost account | Department (Xero Departments) | Can go to an event | GL |
-|---|---|---|---|
-| 700-3000 TECC - F&B Service | Food and Beverage Services | Yes | 6345 |
-| 700-5000 zTECC - Culinary and Stewarding | Food and Beverage Services | Yes | 6345 |
-| 700-2600 TECC - Cleaner | Overhead & Venue Costs | Yes | 6345 (not 6644, for now) |
-| 700-2100 TECC - Fixed Wages | Overhead & Venue Costs | No (Unassigned) | 6345 |
-| 700-2000 TECC - Event Sales | Event Hire & Service Recoveries | No (Unassigned) | 6345 |
+| Cost account | Department (Xero Departments) | Can go to an event |
+|---|---|---|
+| 700-3000 TECC - F&B Service | Food and Beverage Services | Yes |
+| 700-5000 zTECC - Culinary and Stewarding | Food and Beverage Services | Yes |
+| 700-2600 TECC - Cleaner | Overhead & Venue Costs | Yes |
+| 700-2100 TECC - Fixed Wages | Overhead & Venue Costs | No (Unassigned) |
+| 700-2000 TECC - Event Sales | Event Hire & Service Recoveries | No (Unassigned) |
 
-A new cost account in a file is flagged on upload; it must be mapped before the journal can be built.
+A new cost account in a file is flagged on upload; it must be given a department before the journal can be built.
 
-**Pay components → GL.** By transaction type or pay component, the first match wins:
+**Pay components → GL** (decided 14 November 2026: the GL comes from the pay component, not the cost account). One
+row per Micropay *Pay Comp/Add Ded Code*:
 
-| Component | GL |
+| Pay component | GL |
 |---|---|
 | Super | 6370 Superannuation |
-| Sick Leave | 6355 Sick Leave |
-| Allowances (e.g. Nauseous allowance, Tool Allowance) | 6312 Allowances |
-| Everything else (ordinary hours, loadings, overtime, termination pay, auto pay) | the cost account's GL (6345) |
+| Sick | 6355 Sick Leave |
+| NAUS, TOOL (allowances) | 6312 Allowances |
+| Normal, the loadings (CAS25, SAT25, SAT50, SUN50, SUN75, LATEBFMID, LATEAFMID), overtime (OT150, OT200, 152OT150, 152OT200, SHFTGAP50, SHFTGAP100), MINSHIFT, MISSMEAL50, TPoJun83, Other | 6345 Salaries Event Staff (as TECC's journals post them today) |
+
+A new pay component in a file is added on upload, with a first guess at its GL (super, sick, annual and long service
+leave, allowances) and the rest left to set; both lists can be downloaded and uploaded as CSV.
 
 **On-costs.** Payroll tax 4.95% → 6335, workcover 1.711% → 6380, on each line's amount. iLA learns the rates from
 posted payroll journals and shows them for confirmation; a person can override them.

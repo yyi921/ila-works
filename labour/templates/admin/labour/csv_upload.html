@@ -11,15 +11,13 @@
 {% endblock %}
 
 {% block content %}
-<p>One row per payroll cost account, with the columns {{ headings|join:", " }}.
+<p>One row each, with the columns {{ headings|join:", " }}.
   <a href="{{ download_url }}">Download the current list</a> to start from, change it in Excel, save it as CSV and
   upload it here.</p>
 <ul>
-  <li><strong>Department</strong>: one of Xero's departments (e.g. Food and Beverage Services).</li>
-  <li><strong>GL account</strong>: an account code in the chart (e.g. 6345).</li>
-  <li><strong>Can go to an event</strong>: yes or no. No keeps its cost Unassigned (e.g. Fixed Wages, Event Sales).</li>
-  <li>An empty cell keeps what's saved; cost accounts not in the file stay as they are. Every row is checked first:
-    if any has a problem, nothing is saved.</li>
+  {% for note in notes %}<li>{{ note }}</li>{% endfor %}
+  <li>An empty cell keeps what's saved; rows not in the file stay as they are. Every row is checked first: if any
+    has a problem, nothing is saved.</li>
 </ul>
 {% if problems %}
 <ul class="errorlist">{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>

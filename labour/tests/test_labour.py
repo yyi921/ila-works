@@ -12,7 +12,7 @@ from openpyxl import Workbook
 from core.models import Account, Dimension, Journal, JournalLine, Organisation, TrackingCategory, TrackingOption
 from labour import ledger
 from labour.micropay import FileError, read
-from labour.models import CostAccount, Employee, LabourSettings, PayLine, PayRun
+from labour.models import CostAccount, Employee, LabourSettings, PayComponent, PayLine, PayRun
 
 HEADERS = ["Employee Code", "Surname", "Full Name", "Date Of Birth", "Employment Type", "Pay Period ID",
            "Period End Date", "Super Fund Description", "Cost Account Code", "Cost Account Description",
@@ -21,9 +21,13 @@ HEADERS = ["Employee Code", "Surname", "Full Name", "Date Of Birth", "Employment
 END = datetime(2026, 10, 18)
 
 
+CODES = {"Normal Pay": "Normal", "Saturday Loading - 50%": "SAT50", "Superannuation": "Super", "Sick Leave": "Sick",
+         "Nauseous allowance": "NAUS", "Other Leave": "Other"}
+
+
 def row(code, name, cost, cost_name, comp, kind, start, end, hours, amount, period_end=END):
     return [code, name.split()[-1], name, datetime(1990, 1, 2), "CA - Casual", 1460, period_end, "Host Plus", cost,
-            cost_name, comp[:6], comp, kind, start, end, "Fortnightly", hours, amount, 46316]  # 46316 = 21/10/2026
+            cost_name, CODES[comp], comp, kind, start, end, "Fortnightly", hours, amount, 46316]  # 46316 = 21/10/2026
 
 
 ROWS = [
@@ -33,7 +37,7 @@ ROWS = [
         datetime(2026, 10, 10), datetime(2026, 10, 10), 8, 120.00),
     row(111, "Ann Lee", "700-3000", "TECC - F&B Service", "Superannuation", "Super",
         datetime(2026, 10, 5), datetime(2026, 10, 18), 0, 86.40),
-    row(222, "Bo Chen", "700-2100", "TECC - Fixed Wages", "Auto Pay", "Auto Pay",
+    row(222, "Bo Chen", "700-2100", "TECC - Fixed Wages", "Normal Pay", "Auto Pay",
         datetime(2026, 10, 5), datetime(2026, 10, 18), 76, 2743.00),
     row(222, "Bo Chen", "700-2100", "TECC - Fixed Wages", "Sick Leave", "Sick Leave",
         46301, 46301, 7.6, 371.11),  # Excel serial dates: 6/10/2026
@@ -146,8 +150,10 @@ def test_upload_saves_the_run_with_only_code_and_name(org):
         "2350", "Departments", "Event")
     assert [(c.name, c.account, c.rate) for c in settings.on_costs.all()] == [("Payroll tax", "6335", None),
                                                                               ("Workcover", "6380", None)]
-    assert [(r.text, r.account) for r in settings.component_rules.all()] == [
-        ("Super", "6370"), ("Sick Leave", "6355"), ("allowance", "6312")]
+    # The GL comes from the pay component: obvious ones guessed from the chart, the rest left to set.
+    assert {c.code: c.gl_account for c in result.new_components} == {
+        "Normal": "", "SAT50": "", "Super": "6370", "Sick": "6355", "NAUS": "6312", "Other": ""}
+    assert PayComponent.objects.get(code="Normal").transaction_type == "Hours By Rate"  # the first line's
 
 
 def test_same_file_is_unchanged_and_a_new_file_replaces_the_run(org):
@@ -171,25 +177,27 @@ def test_finds_the_xero_journal_learns_rates_and_compares(org):
     settings = ledger.settings_for(org[0])
     assert [c.rate for c in settings.on_costs.all()] == [D("0.04950"), D("0.01711")]
 
-    CostAccount.objects.filter(code__in=["700-3000", "700-2100", "700-2600"]).update(gl_account="6345")
+    PayComponent.objects.filter(gl_account="").update(gl_account="6345")
     rows, total = ledger.xero_comparison(result.run, settings)
     by_code = {r[0]: r[2:] for r in rows}
     assert by_code["6345"] == (D("3463.00"), D("3463.00"), D("0.00"))
-    assert by_code["6312"] == (D("27.63"), D("0"), D("27.63"))  # the allowance rule
+    assert by_code["6312"] == (D("27.63"), D("0"), D("27.63"))  # NAUS goes to allowances
     assert by_code["6644"] == (D("0"), D("27.63"), D("-27.63"))  # Xero put the cleaner's allowance in 6644
     assert by_code["6335"] == (D("195.43"), D("195.43"), D("0.00"))
     assert "2350" not in by_code and total == (D("4211.12"), D("4211.12"), D("0.00"))
 
-    CostAccount.objects.filter(code="700-3000").update(gl_account="")
+    PayComponent.objects.filter(code="SAT50").update(gl_account="")
     gl, _ = ledger.by_gl(result.run, settings)
-    assert gl[ledger.NOT_MAPPED] == D("720.00")
+    assert gl[ledger.NOT_MAPPED] == D("120.00")
+    assert [(c.code, a) for c, _, a in ledger.by_component(result.run)][:2] == [("NAUS", D("27.63")),
+                                                                                ("Normal", D("3343.00"))]
 
 
 def test_cost_account_department_must_be_a_xero_department(org):
     from django.core.exceptions import ValidationError
 
     ledger.settings_for(org[0])
-    account = CostAccount(organisation=org[0], code="700-3000", department="Kitchen", gl_account="6345")
+    account = CostAccount(organisation=org[0], code="700-3000", department="Kitchen")
     with pytest.raises(ValidationError, match="Choose one of Xero's departments"):
         account.full_clean()
     account.department = "Food and Beverage Services"
@@ -271,48 +279,76 @@ def cost_csv(rows):
 
 
 def test_cost_accounts_from_csv_are_checked_then_saved(org):
-    from labour.cost_accounts import import_csv, to_csv
+    from labour.mappings import COST_ACCOUNTS, import_csv, to_csv
 
-    CostAccount.objects.create(organisation=org[0], code="700-2100", name="TECC - Fixed Wages", gl_account="6345")
-    bad = import_csv(org[0], org[1], cost_csv([
-        ["Code", "Name", "Department", "GL account", "Can go to an event"],
-        ["700-3000", "TECC - F&B Service", "Kitchen", "9999", "maybe"],
-        ["700-3000", "Again", "", "", ""], ["", "No code", "", "", ""]]))
+    CostAccount.objects.create(organisation=org[0], code="700-2100", name="TECC - Fixed Wages")
+    bad = import_csv(COST_ACCOUNTS, org[0], org[1], cost_csv([
+        ["Code", "Name", "Department", "Can go to an event"],
+        ["700-3000", "TECC - F&B Service", "Kitchen", "maybe"],
+        ["700-3000", "Again", "", ""], ["", "No code", "", ""]]))
     assert bad.problems == [
         "Row 2 (700-3000): Kitchen isn't one of Xero's departments (Event Hire & Service Recoveries, Food and "
         "Beverage Services, Overhead & Venue Costs).",
-        "Row 2 (700-3000): GL account 9999 isn't in the chart of accounts.",
         "Row 2 (700-3000): Can go to an event must be yes or no, not maybe.",
         "Row 3: 700-3000 is also on row 2.", "Row 4: Code is empty."]
     assert CostAccount.objects.count() == 1  # nothing saved
 
-    good = import_csv(org[0], org[1], "﻿" + cost_csv([
-        ["Cost Account Code", "Name", "Department", "GL", "Can go to an event"],
-        ["700-3000", "TECC - F&B Service", "food and beverage services", "6345", "yes"],
-        ["700-2100", "", "Overhead & Venue Costs", "", "no"]]))
+    good = import_csv(COST_ACCOUNTS, org[0], org[1], "﻿" + cost_csv([
+        ["Cost Account Code", "Name", "Department", "Can go to an event"],
+        ["700-3000", "TECC - F&B Service", "food and beverage services", "yes"],
+        ["700-2100", "", "Overhead & Venue Costs", "no"]]))
     assert not good.problems and good.created == ["700-3000"] and good.updated == ["700-2100"]
     fb, fixed = CostAccount.objects.get(code="700-3000"), CostAccount.objects.get(code="700-2100")
-    assert (fb.department, fb.gl_account, fb.taggable) == ("Food and Beverage Services", "6345", True)
-    assert (fixed.name, fixed.gl_account, fixed.taggable) == ("TECC - Fixed Wages", "6345", False)  # blanks kept
-    again = import_csv(org[0], org[1], to_csv(org[0]))
+    assert (fb.department, fb.taggable) == ("Food and Beverage Services", True)
+    assert (fixed.name, fixed.taggable) == ("TECC - Fixed Wages", False)  # an empty cell keeps the name
+    again = import_csv(COST_ACCOUNTS, org[0], org[1], to_csv(COST_ACCOUNTS, org[0]))
     assert again.unchanged == 2 and not again.created and not again.updated
-    assert to_csv(org[0]).splitlines()[1] == "700-2100,TECC - Fixed Wages,Overhead & Venue Costs,6345,no"
-    assert "Unknown column \"Venue\"" in import_csv(org[0], org[1], "Code,Venue\nA,B\n").problems[0]
+    assert to_csv(COST_ACCOUNTS, org[0]).splitlines()[:2] == [
+        "﻿Code,Name,Department,Can go to an event", "700-2100,TECC - Fixed Wages,Overhead & Venue Costs,no"]
+    assert 'Unknown column "Venue"' in import_csv(COST_ACCOUNTS, org[0], org[1], "Code,Venue\nA,B\n").problems[0]
+    old = import_csv(COST_ACCOUNTS, org[0], org[1], "Code,GL account\nA,6345\n").problems[0]
+    assert old == 'Remove the "GL account" column: GL accounts now come from the pay component (Labour → Pay ' \
+                  'components).'
 
 
-def test_admin_cost_account_csv_buttons(client, org):
+def test_pay_components_from_csv_set_the_gl(org):
+    from labour.mappings import PAY_COMPONENTS, import_csv, to_csv
+
+    assert to_csv(PAY_COMPONENTS, org[0]).splitlines() == ["﻿Code,Description,GL account",
+                                                           "SAT50,Saturday Loading - 50%,6345"]  # example row
+    ledger.upload(org[0], org[1], "a.xlsx", workbook())
+    bad = import_csv(PAY_COMPONENTS, org[0], org[1], "Code,Description,GL account\nSAT50,,9999\n")
+    assert bad.problems == ["Row 2 (SAT50): GL account 9999 isn't in the chart of accounts."]
+    good = import_csv(PAY_COMPONENTS, org[0], org[1], cost_csv([
+        ["Pay Comp/Add Ded Code", "GL account"], ["Normal", "6345"], ["SAT50", "6345"], ["CAS25", "6345"]]))
+    assert not good.problems and good.updated == ["Normal", "SAT50"] and good.created == ["CAS25"]
+    assert PayComponent.objects.get(code="SAT50").description == "Saturday Loading - 50%"  # kept
+    gl, _ = ledger.by_gl(PayRun.objects.get())
+    assert gl == {"6345": D("3463.00"), "6370": D("86.40"), "6355": D("371.11"), "6312": D("27.63"),
+                  ledger.NOT_MAPPED: D("0.00")}  # Other Leave ($0) has no GL yet
+
+
+def test_admin_csv_buttons(client, org):
     boss = get_user_model().objects.create_superuser("boss", password="pw")
     client.force_login(boss)
     page = client.get("/admin/labour/costaccount/").content.decode()
-    assert "Upload cost accounts (CSV)" in page and f"/download/?organisation={org[0].pk}" in page
+    assert "Upload cost accounts (CSV)" in page and f"/costaccount/download/?organisation={org[0].pk}" in page
     csv_text = client.get(f"/admin/labour/costaccount/download/?organisation={org[0].pk}").content.decode("utf-8-sig")
-    assert csv_text.splitlines()[0] == "Code,Name,Department,GL account,Can go to an event"
+    assert csv_text.splitlines()[0] == "Code,Name,Department,Can go to an event"
     bad = client.post("/admin/labour/costaccount/upload/", {"organisation": org[0].pk, "file": SimpleUploadedFile(
         "cost.csv", b"Code,Department\n700-3000,Kitchen\n")}).content.decode()
     assert "isn&#x27;t one of Xero&#x27;s departments" in bad and "Nothing was saved" in bad
     response = client.post("/admin/labour/costaccount/upload/", {"organisation": org[0].pk, "file": SimpleUploadedFile(
-        "cost.csv", b"Code,Department,GL account\n700-3000,Food and Beverage Services,6345\n")})
-    assert response.status_code == 302 and CostAccount.objects.get(code="700-3000").gl_account == "6345"
+        "cost.csv", b"Code,Department\n700-3000,Food and Beverage Services\n")})
+    assert response.status_code == 302
+    assert CostAccount.objects.get(code="700-3000").department == "Food and Beverage Services"
     wrong = client.post("/admin/labour/costaccount/upload/", {"organisation": org[0].pk, "file": SimpleUploadedFile(
         "cost.xlsx", b"x")}).content.decode()
     assert "isn&#x27;t a CSV file" in wrong
+
+    page = client.get("/admin/labour/paycomponent/").content.decode()
+    assert "Upload pay components (CSV)" in page
+    response = client.post("/admin/labour/paycomponent/upload/", {"organisation": org[0].pk, "file": SimpleUploadedFile(
+        "pay.csv", b"Code,Description,GL account\nSAT50,Saturday Loading - 50%,6345\n")})
+    assert response.status_code == 302 and PayComponent.objects.get(code="SAT50").gl_account == "6345"
+    assert "SAT50" in client.get(f"/admin/labour/paycomponent/download/?organisation={org[0].pk}").content.decode()

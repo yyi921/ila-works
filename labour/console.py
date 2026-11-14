@@ -61,10 +61,16 @@ def _upload(ctx, upload):
     _xero_table(out, run, settings)
     if xero_note:
         out.add(Note(xero_note, "warning"))
+    unset = [c for c in result.new_components if not c.gl_account]
+    if unset:
+        out.add(Note("New pay components without a GL account: " + ", ".join(c.code for c in unset)
+                     + ". Give each a GL account in admin (Labour → Pay components).", "warning"))
+        out.link = reverse("admin:labour_paycomponent_changelist") + "?mapping=missing"
+        out.link_text = "Set up the new pay components"
     if result.new_cost_accounts:
         out.add(Note("New cost accounts: " + ", ".join(str(c) for c in result.new_cost_accounts)
-                     + ". Give each a department and GL account (and say whether it can go to an event) in admin.",
-                     "warning"))
+                     + ". Give each a department and say whether it can go to an event, in admin (Labour → Cost "
+                     "accounts).", "warning"))
         out.link = reverse("admin:labour_costaccount_changelist") + "?mapping=missing"
         out.link_text = "Set up the new cost accounts"
     for text in result.warnings + result.learned:
@@ -86,12 +92,17 @@ def _refresh_journals(ctx, run):
 
 def _cost_account_table(out, run):
     table = out.add(Table([Column("Cost account"), Column("Department"), Column("Can go to an event"),
-                           Column("GL"), Column("Employees", NUMBER), Column("Hours", NUMBER),
-                           Column("Amount", MONEY)], title="By cost account"))
+                           Column("Employees", NUMBER), Column("Hours", NUMBER), Column("Amount", MONEY)],
+                          title="By cost account"))
     for account, employees, hours, amount in ledger.by_cost_account(run):
-        table.add(str(account), account.department or "Not set", "Yes" if account.taggable else "No",
-                  account.gl_account or "Not set", employees, hours, amount)
-    table.add("Total", "", "", "", run.employee_count, None, run.total, total=True)
+        table.add(str(account), account.department or "Not set", "Yes" if account.taggable else "No", employees,
+                  hours, amount)
+    table.add("Total", "", "", run.employee_count, None, run.total, total=True)
+    table = out.add(Table([Column("Pay component"), Column("GL"), Column("Hours", NUMBER), Column("Amount", MONEY)],
+                          title="By pay component"))
+    for component, hours, amount in ledger.by_component(run):
+        table.add(str(component), component.gl_account or "Not set", hours, amount)
+    table.add("Total", "", None, run.total, total=True)
 
 
 def _xero_table(out, run, settings):

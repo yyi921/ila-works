@@ -9,9 +9,9 @@ from django.utils.html import format_html
 from core.models import Organisation
 
 from . import ledger
-from .cost_accounts import HEADINGS, import_csv, to_csv
+from .mappings import COST_ACCOUNTS, PAY_COMPONENTS, import_csv, to_csv
 from .micropay import FileError
-from .models import ComponentRule, CostAccount, Employee, LabourSettings, OnCost, PayLine, PayRun
+from .models import CostAccount, Employee, LabourSettings, OnCost, PayComponent, PayLine, PayRun
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_CSV_BYTES = 1024 * 1024
@@ -23,20 +23,13 @@ class OnCostInline(admin.TabularInline):
     extra = 0
 
 
-class ComponentRuleInline(admin.TabularInline):
-    model = ComponentRule
-    fields = ("match_on", "text", "account", "order")
-    extra = 0
-    verbose_name_plural = "Pay component rules (first match wins; other pay goes to its cost account's GL)"
-
-
 @admin.register(LabourSettings)
 class LabourSettingsAdmin(admin.ModelAdmin):
     list_display = ("organisation", "source", "journal_match", "credit_account", "department_tracking",
                     "event_dimension")
     fields = ("organisation", "source", "journal_match", "narration", "credit_account", "tax_rate",
               "department_tracking", "event_dimension")
-    inlines = [OnCostInline, ComponentRuleInline]
+    inlines = [OnCostInline]
 
     def save_formset(self, request, form, formset, change):
         for obj in formset.save(commit=False):
@@ -46,38 +39,52 @@ class LabourSettingsAdmin(admin.ModelAdmin):
             obj.delete()
 
 
-class NeedsMappingFilter(admin.SimpleListFilter):
+class MissingFilter(admin.SimpleListFilter):
+    """Rows still to set up: a cost account without a department, a pay component without a GL account."""
+
     title = "set-up"
     parameter_name = "mapping"
+    field = ""
+    label = ""
 
     def lookups(self, request, model_admin):
-        return (("missing", "Department or GL missing"), ("done", "Set up"))
+        return (("missing", self.label), ("done", "Set up"))
 
     def queryset(self, request, queryset):
-        missing = queryset.filter(department="") | queryset.filter(gl_account="")
         if self.value() == "missing":
-            return missing
+            return queryset.filter(**{self.field: ""})
         if self.value() == "done":
-            return queryset.exclude(pk__in=missing)
+            return queryset.exclude(**{self.field: ""})
         return queryset
 
 
-@admin.register(CostAccount)
-class CostAccountAdmin(admin.ModelAdmin):
-    """Payroll cost accounts: which Xero department and GL account each goes to, and whether its cost can go to an
-    event. New ones are added here when a pay-run file has them."""
+class NoDepartmentFilter(MissingFilter):
+    field, label = "department", "No department"
 
-    list_display = ("code", "name", "department", "gl_account", "taggable", "organisation")
-    list_editable = ("department", "gl_account", "taggable")
-    list_filter = ("organisation", NeedsMappingFilter, "taggable")
-    search_fields = ("code", "name", "department")
-    fields = ("organisation", "code", "name", "department", "gl_account", "taggable")
-    change_list_template = "admin/labour/costaccount/change_list.html"
+
+class NoGLFilter(MissingFilter):
+    field, label = "gl_account", "No GL account"
+
+
+class CsvFileForm(forms.Form):
+    organisation = forms.ModelChoiceField(Organisation.objects.all())
+    file = forms.FileField(help_text="A CSV with the columns shown above. Download the current list to start from.")
+
+
+class CsvMixin:
+    """Download as CSV and Upload (CSV) buttons on a mapping list."""
+
+    spec = None
+    csv_notes = ()
+    change_list_template = "admin/labour/csv_change_list.html"
+
+    def _url_name(self, action):
+        return f"labour_{self.model._meta.model_name}_{action}"
 
     def get_urls(self):
-        return [path("upload/", self.admin_site.admin_view(self.upload_view), name="labour_costaccount_upload"),
+        return [path("upload/", self.admin_site.admin_view(self.upload_view), name=self._url_name("upload")),
                 path("download/", self.admin_site.admin_view(self.download_view),
-                     name="labour_costaccount_download")] + super().get_urls()
+                     name=self._url_name("download"))] + super().get_urls()
 
     def _organisation(self, request):
         """The organisation filtered on in the list, else the only one."""
@@ -90,24 +97,25 @@ class CostAccountAdmin(admin.ModelAdmin):
     def changelist_view(self, request, extra_context=None):
         org = self._organisation(request)
         query = f"?organisation={org.pk}" if org else ""
-        return super().changelist_view(request, {**(extra_context or {}), "org_query": query})
+        return super().changelist_view(request, {
+            **(extra_context or {}), "csv_upload_url": reverse(f"admin:{self._url_name('upload')}") + query,
+            "csv_download_url": reverse(f"admin:{self._url_name('download')}") + query, "csv_what": self.spec.what})
 
     def download_view(self, request):
         org = self._organisation(request)
         if org is None:
             messages.warning(request, "Filter the list by organisation first, then download.")
-            return redirect("admin:labour_costaccount_changelist")
-        response = HttpResponse(to_csv(org), content_type="text/csv; charset=utf-8")
-        response["Content-Disposition"] = f'attachment; filename="{org.name} cost accounts.csv"'
+            return redirect(f"admin:{self._url_name('changelist')}")
+        response = HttpResponse(to_csv(self.spec, org), content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="{org.name} {self.spec.what}.csv"'
         return response
 
     def upload_view(self, request):
-        if not request.user.has_perm("labour.change_costaccount"):
-            messages.error(request, "You don't have permission to change cost accounts.")
-            return redirect("admin:labour_costaccount_changelist")
+        if not request.user.has_perm(f"labour.change_{self.model._meta.model_name}"):
+            messages.error(request, f"You don't have permission to change {self.spec.what}.")
+            return redirect(f"admin:{self._url_name('changelist')}")
         org = self._organisation(request)
-        form = CostAccountUploadForm(request.POST or None, request.FILES or None,
-                                     initial={"organisation": org} if org else None)
+        form = CsvFileForm(request.POST or None, request.FILES or None, initial={"organisation": org} if org else None)
         problems = []
         if request.method == "POST" and form.is_valid():
             upload, org = form.cleaned_data["file"], form.cleaned_data["organisation"]
@@ -122,23 +130,51 @@ class CostAccountAdmin(admin.ModelAdmin):
                     text = None
                     form.add_error("file", "The file isn't saved as UTF-8. In Excel: File → Save As → CSV UTF-8.")
                 if text is not None:
-                    result = import_csv(org, request.user, text, upload.name)
+                    result = import_csv(self.spec, org, request.user, text, upload.name)
                     problems = result.problems
                     if not problems:
-                        messages.success(request, f"Cost accounts from {upload.name}: {len(result.created)} new, "
-                                                  f"{len(result.updated)} updated, {result.unchanged} unchanged.")
-                        return redirect(reverse("admin:labour_costaccount_changelist")
+                        messages.success(request, f"{self.spec.what.capitalize()} from {upload.name}: "
+                                                  f"{len(result.created)} new, {len(result.updated)} updated, "
+                                                  f"{result.unchanged} unchanged.")
+                        return redirect(reverse(f"admin:{self._url_name('changelist')}")
                                         + f"?organisation__id__exact={org.pk}")
-        return TemplateResponse(request, "admin/labour/costaccount/upload.html", {
-            **self.admin_site.each_context(request), "title": "Upload cost accounts", "form": form,
-            "problems": problems, "headings": HEADINGS, "opts": self.model._meta,
-            "download_url": reverse("admin:labour_costaccount_download") + (f"?organisation={org.pk}" if org else "")})
+        return TemplateResponse(request, "admin/labour/csv_upload.html", {
+            **self.admin_site.each_context(request), "title": f"Upload {self.spec.what}", "form": form,
+            "problems": problems, "headings": [h for h, _ in self.spec.headings], "opts": self.model._meta,
+            "notes": self.csv_notes,
+            "download_url": reverse(f"admin:{self._url_name('download')}") + (f"?organisation={org.pk}" if org else "")})
 
 
-class CostAccountUploadForm(forms.Form):
-    organisation = forms.ModelChoiceField(Organisation.objects.all())
-    file = forms.FileField(help_text="A CSV with the columns Code, Name, Department, GL account and Can go to an "
-                                     "event (yes/no). Download the current list to start from.")
+@admin.register(CostAccount)
+class CostAccountAdmin(CsvMixin, admin.ModelAdmin):
+    """Payroll cost accounts: the Xero department each goes to, and whether its cost can go to an event. New ones
+    are added here when a pay-run file has them."""
+
+    spec = COST_ACCOUNTS
+    csv_notes = ("Department: one of Xero's departments (e.g. Food and Beverage Services).",
+                 "Can go to an event: yes or no. No keeps its cost Unassigned (e.g. Fixed Wages, Event Sales).",
+                 "The GL account comes from the pay component (Labour → Pay components), not the cost account.")
+    list_display = ("code", "name", "department", "taggable", "organisation")
+    list_editable = ("department", "taggable")
+    list_filter = ("organisation", NoDepartmentFilter, "taggable")
+    search_fields = ("code", "name", "department")
+    fields = ("organisation", "code", "name", "department", "taggable")
+
+
+@admin.register(PayComponent)
+class PayComponentAdmin(CsvMixin, admin.ModelAdmin):
+    """Pay components (Micropay's Pay Comp/Add Ded Code) and the GL account each goes to. New ones are added here
+    when a pay-run file has them."""
+
+    spec = PAY_COMPONENTS
+    csv_notes = ("Code: the Pay Comp/Add Ded Code exactly as in Micropay (e.g. SAT50).",
+                 "GL account: an account code in the chart (e.g. 6345).")
+    list_display = ("code", "description", "transaction_type", "gl_account", "organisation")
+    list_editable = ("gl_account",)
+    list_filter = ("organisation", NoGLFilter, "transaction_type")
+    search_fields = ("code", "description")
+    fields = ("organisation", "code", "description", "transaction_type", "gl_account")
+    readonly_fields = ("transaction_type",)
 
 
 @admin.register(Employee)
@@ -223,7 +259,8 @@ class PayRunAdmin(admin.ModelAdmin):
             settings = ledger.settings_for(run.organisation)
             gl, on_costs = ledger.by_gl(run, settings)
             extra.update(
-                cost_accounts=ledger.by_cost_account(run), gl_rows=sorted(gl.items()),
+                cost_accounts=ledger.by_cost_account(run), components=ledger.by_component(run),
+                gl_rows=sorted(gl.items()), components_url=reverse("admin:labour_paycomponent_changelist"),
                 on_costs=[(cost, amount, f"{cost.rate * 100:.3f}%" if cost.rate is not None else "")
                           for cost, amount in on_costs],
                 comparison=ledger.xero_comparison(run, settings),
@@ -245,8 +282,14 @@ def _report(request, result):
     if result.new_cost_accounts:
         url = reverse("admin:labour_costaccount_changelist") + "?mapping=missing"
         messages.warning(request, format_html(
-            'New cost accounts: {}. <a href="{}">Give each a department and GL account</a>.',
+            'New cost accounts: {}. <a href="{}">Give each a department and say whether it can go to an event</a>.',
             ", ".join(str(c) for c in result.new_cost_accounts), url))
+    unset = [c for c in result.new_components if not c.gl_account]
+    if unset:
+        url = reverse("admin:labour_paycomponent_changelist") + "?mapping=missing"
+        messages.warning(request, format_html(
+            'New pay components without a GL account: {}. <a href="{}">Give each a GL account</a>.',
+            ", ".join(c.code for c in unset), url))
     for text in result.warnings + result.learned:
         messages.warning(request, text)
 
