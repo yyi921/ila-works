@@ -14,7 +14,7 @@ from console.registry import CommandError, read_params
 from xero.api import XeroAPIError
 from xero.sync import copy_period
 
-from . import ledger
+from . import journal, ledger
 from .micropay import FileError
 from .models import PayRun
 
@@ -74,6 +74,10 @@ def _upload(ctx, upload):
         out.link = reverse("admin:labour_costaccount_changelist") + "?mapping=missing"
         out.link_text = "Set up the new cost accounts"
     for text in result.warnings + result.learned:
+        out.add(Note(text, "warning"))
+    summary, problems = journal.upload_notes(run, ctx.user)
+    out.add(Note(summary))
+    for text in problems:
         out.add(Note(text, "warning"))
     out.add(Note("Only each employee's code and name are kept from the file. Uploading the same pay run again "
                  "replaces it."))

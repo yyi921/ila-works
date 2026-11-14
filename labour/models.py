@@ -9,7 +9,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from core.models import MONEY, Dimension, Journal, TenantModel
+from core.models import MONEY, Dimension, DimensionValue, Journal, TenantModel
 
 
 class LabourSettings(TenantModel):
@@ -184,3 +184,39 @@ class PayLine(TenantModel):
 
     def __str__(self):
         return f"{self.employee} {self.component} {self.amount}"
+
+
+class LabourOverride(TenantModel):
+    """A person's decision on which event labour belongs to, over one or more days: for one employee, or for
+    everyone working those days (employee blank). Value blank means Unassigned. It beats iLA's own allocation; the
+    newest decision wins where two overlap. Only cost accounts that can go to an event are affected."""
+
+    employee = models.ForeignKey(Employee, null=True, blank=True, on_delete=models.CASCADE, related_name="overrides",
+                                 help_text="Blank: everyone working those days.")
+    date_from = models.DateField()
+    date_to = models.DateField()
+    value = models.ForeignKey(DimensionValue, null=True, blank=True, on_delete=models.CASCADE, related_name="+",
+                              help_text="The event. Blank: Unassigned.")
+    note = models.CharField(max_length=255, blank=True)
+    set_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                               related_name="+")
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.CheckConstraint(condition=models.Q(date_to__gte=models.F("date_from")),
+                                   name="labour_override_dates")]
+        ordering = ["-created_at", "-pk"]
+        verbose_name = "labour change"
+
+    def __str__(self):
+        who = str(self.employee) if self.employee_id else "Everyone"
+        days = f"{self.date_from:%d/%m/%Y}" + (f"–{self.date_to:%d/%m/%Y}" if self.date_to != self.date_from else "")
+        return f"{who}, {days}: {self.value.code if self.value_id else 'Unassigned'}"
+
+
+class LabourView(PayRun):
+    """Admin entry for the Labour view (by employee, day and event)."""
+
+    class Meta:
+        proxy = True
+        verbose_name = verbose_name_plural = "Labour view"

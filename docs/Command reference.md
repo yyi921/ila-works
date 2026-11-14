@@ -20,7 +20,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/bills` |  | Bills due in the next 7 days (or --due <days>), with overdue bills listed first. | `/bills [--due <days>] [--overdue] [>> file.xlsx]` |
 | `/accrue` |  | Month-end accrual review: proposed accruals by source with their evidence; accept, adjust or reject each, then build the journal file. | `/accrue [--<period>] [--read \| --refresh]` |
 | `/review` |  | Month-end P&L review: the P&L by group with GP, COGS, labour, EBITDA and net profit % against last month, last year or budget (MTD or YTD), GL accounts per group (L1), and your review requests; leave notes and sign off by account code, group or RR-01. | `/review [--<period>] [--vs lm\|ly\|budget] [--mtd\|--ytd] [--L0\|--L1] [--<group> ...] [--refresh]` |
-| `/labour` |  | Upload a pay-run file into iLA's labour ledger, or list the pay runs; each is checked against its Summary total and the payroll journal in Xero. | `/labour [<< breakdown.xlsx] [--<period>]` |
+| `/labour` |  | Upload a pay-run file into iLA's labour ledger, or list the pay runs; each is checked against its Summary total and the payroll journal in Xero; uploading also builds the pay run's journal (ADJ, Expected). | `/labour [<< breakdown.xlsx] [--<period>]` |
 | `/reconcile` | `/recon`, `/rec` | Month-end balance sheet reconciliation: each account's Xero balance against its support, with reconciling items, schedules and preparer/reviewer sign-off. | `/reconcile [<account>] [--<period>] [<< schedule.csv] \| /reconcile --bank \| /reconcile --template` |
 | `/compare` |  | Compare bills, invoices or a P&L measure month by month to spot unusual, new or missing amounts. | `/compare --bill\|--invoice [<number>] [--supplier\|--customer <name or code>] [--account <code or name>] [--by account] [--<period>] [--detail] [--min <amount>]   or   /compare --revenue\|--cos\|--gp\|--expenses\|--profit [--<period>]` |
 | `/inv` | `/invoice`, `/bill` | Show one invoice, bill or credit note by its number. | `/inv <number>` |
@@ -222,7 +222,7 @@ In an open review, refer to lines by account code (`4061`, `6300-6380`), group (
 
 ### /labour
 
-Upload a pay-run file into iLA's labour ledger, or list the pay runs; each is checked against its Summary total and the payroll journal in Xero.
+Upload a pay-run file into iLA's labour ledger, or list the pay runs; each is checked against its Summary total and the payroll journal in Xero; uploading also builds the pay run's journal (ADJ, Expected).
 
 Usage: `/labour [<< breakdown.xlsx] [--<period>]`
 
