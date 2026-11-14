@@ -273,6 +273,12 @@ Quarters and financial years follow the year end set in Xero.
      | 700-2100 Fixed Wages | Overhead & Venue Costs | 6345 | No |
      | 700-2000 Event Sales | Event Hire & Service Recoveries | 6345 | No |
 
+     Or do them all at once from a CSV: on the Cost accounts page, **Download as CSV** (columns Code, Name,
+     Department, GL account, Can go to an event), fill it in Excel, save as CSV and **Upload cost accounts (CSV)**.
+     Every row is checked first (the department must be one of Xero's, the GL account must be in the chart, and Can
+     go to an event is yes or no); if any row has a problem, nothing is saved and the problems are listed. An empty
+     cell keeps what's saved, and cost accounts not in the file stay as they are.
+
 - **Good to know:**
   - Only each employee's **code and name** are kept (and their employment type, e.g. Casual). Date of birth, super
     fund and the file's other personal details are never read.
@@ -748,6 +754,7 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 14 Nov 2026 | Cost accounts can be downloaded and uploaded as a CSV (Admin → Labour → Cost accounts), checked against Xero's departments and the chart before anything is saved. |
 | 14 Nov 2026 | Added `/labour` and Admin → Labour: upload a pay-run file (Micropay employee breakdown), checked against its Summary total and the payroll journal in Xero; cost accounts mapped to department, GL and whether they can go to an event; on-cost rates learned from Xero. |
 | 14 Nov 2026 | Event dates are each event's own Start, End, Bump-in days, Bump-out days and Season: `/createTag` columns, `/dim` columns, and the new admin **Dimension values** page (edit in the list, **Suggest dates** from codes and sales invoices). The Event page in admin no longer fails with Bad Request (400). Approving `/createTag` (or linking a Xero code in admin) tags transactions already copied with that code. |
 | 8 Nov 2026 | `/review` ratios are defined in Admin → Review → Review settings as formulas of account codes, ranges and groups (e.g. `5110-5330 / 4005 + 4810 + 4830`); the defaults give the same figures as before. |

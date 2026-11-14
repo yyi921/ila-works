@@ -1,5 +1,6 @@
 from django import forms
 from django.contrib import admin, messages
+from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
@@ -8,10 +9,12 @@ from django.utils.html import format_html
 from core.models import Organisation
 
 from . import ledger
+from .cost_accounts import HEADINGS, import_csv, to_csv
 from .micropay import FileError
 from .models import ComponentRule, CostAccount, Employee, LabourSettings, OnCost, PayLine, PayRun
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_CSV_BYTES = 1024 * 1024
 
 
 class OnCostInline(admin.TabularInline):
@@ -69,6 +72,73 @@ class CostAccountAdmin(admin.ModelAdmin):
     list_filter = ("organisation", NeedsMappingFilter, "taggable")
     search_fields = ("code", "name", "department")
     fields = ("organisation", "code", "name", "department", "gl_account", "taggable")
+    change_list_template = "admin/labour/costaccount/change_list.html"
+
+    def get_urls(self):
+        return [path("upload/", self.admin_site.admin_view(self.upload_view), name="labour_costaccount_upload"),
+                path("download/", self.admin_site.admin_view(self.download_view),
+                     name="labour_costaccount_download")] + super().get_urls()
+
+    def _organisation(self, request):
+        """The organisation filtered on in the list, else the only one."""
+        pk = request.GET.get("organisation") or request.GET.get("organisation__id__exact")
+        if pk:
+            return Organisation.objects.filter(pk=pk).first()
+        organisations = Organisation.objects.all()
+        return organisations.first() if organisations.count() == 1 else None
+
+    def changelist_view(self, request, extra_context=None):
+        org = self._organisation(request)
+        query = f"?organisation={org.pk}" if org else ""
+        return super().changelist_view(request, {**(extra_context or {}), "org_query": query})
+
+    def download_view(self, request):
+        org = self._organisation(request)
+        if org is None:
+            messages.warning(request, "Filter the list by organisation first, then download.")
+            return redirect("admin:labour_costaccount_changelist")
+        response = HttpResponse(to_csv(org), content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="{org.name} cost accounts.csv"'
+        return response
+
+    def upload_view(self, request):
+        if not request.user.has_perm("labour.change_costaccount"):
+            messages.error(request, "You don't have permission to change cost accounts.")
+            return redirect("admin:labour_costaccount_changelist")
+        org = self._organisation(request)
+        form = CostAccountUploadForm(request.POST or None, request.FILES or None,
+                                     initial={"organisation": org} if org else None)
+        problems = []
+        if request.method == "POST" and form.is_valid():
+            upload, org = form.cleaned_data["file"], form.cleaned_data["organisation"]
+            if not upload.name.lower().endswith(".csv"):
+                form.add_error("file", f"{upload.name} isn't a CSV file. In Excel: File → Save As → CSV UTF-8.")
+            elif upload.size > MAX_CSV_BYTES:
+                form.add_error("file", "The file is over 1 MB.")
+            else:
+                try:
+                    text = upload.read().decode("utf-8-sig")
+                except UnicodeDecodeError:
+                    text = None
+                    form.add_error("file", "The file isn't saved as UTF-8. In Excel: File → Save As → CSV UTF-8.")
+                if text is not None:
+                    result = import_csv(org, request.user, text, upload.name)
+                    problems = result.problems
+                    if not problems:
+                        messages.success(request, f"Cost accounts from {upload.name}: {len(result.created)} new, "
+                                                  f"{len(result.updated)} updated, {result.unchanged} unchanged.")
+                        return redirect(reverse("admin:labour_costaccount_changelist")
+                                        + f"?organisation__id__exact={org.pk}")
+        return TemplateResponse(request, "admin/labour/costaccount/upload.html", {
+            **self.admin_site.each_context(request), "title": "Upload cost accounts", "form": form,
+            "problems": problems, "headings": HEADINGS, "opts": self.model._meta,
+            "download_url": reverse("admin:labour_costaccount_download") + (f"?organisation={org.pk}" if org else "")})
+
+
+class CostAccountUploadForm(forms.Form):
+    organisation = forms.ModelChoiceField(Organisation.objects.all())
+    file = forms.FileField(help_text="A CSV with the columns Code, Name, Department, GL account and Can go to an "
+                                     "event (yes/no). Download the current list to start from.")
 
 
 @admin.register(Employee)
