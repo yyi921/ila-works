@@ -11,7 +11,8 @@ from core.models import Organisation
 from . import ledger
 from .mappings import COST_ACCOUNTS, PAY_COMPONENTS, import_csv, to_csv
 from .micropay import FileError
-from .models import CostAccount, Employee, LabourSettings, OnCost, PayComponent, PayLine, PayRun
+from .models import (CostAccount, Employee, LabourOverride, LabourSettings, LabourView, OnCost, PayComponent, PayLine,
+                     PayRun)
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_CSV_BYTES = 1024 * 1024
@@ -292,6 +293,13 @@ def _report(request, result):
             ", ".join(c.code for c in unset), url))
     for text in result.warnings + result.learned:
         messages.warning(request, text)
+    if not result.unchanged:
+        from .journal import upload_notes  # noqa: PLC0415
+
+        summary, problems = upload_notes(run, request.user)
+        messages.info(request, summary)
+        for text in problems:
+            messages.warning(request, text)
 
 
 @admin.register(PayLine)
@@ -308,3 +316,37 @@ class PayLineAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+
+@admin.register(LabourOverride)
+class LabourOverrideAdmin(admin.ModelAdmin):
+    """Changes people made in the Labour view: an employee's days, or a whole day, set to an event or Unassigned."""
+
+    list_display = ("__str__", "note", "set_by", "created_at", "organisation")
+    list_filter = ("organisation",)
+    search_fields = ("employee__name", "employee__code", "value__code", "note")
+    list_select_related = ("employee", "value", "set_by")
+    fields = ("organisation", "employee", "date_from", "date_to", "value", "note", "set_by")
+    raw_id_fields = ("employee", "value")
+    readonly_fields = ("set_by",)
+
+
+@admin.register(LabourView)
+class LabourViewAdmin(admin.ModelAdmin):
+    """Admin → Labour → Labour view: the month's labour by employee, day and event."""
+
+    def get_urls(self):
+        from .view import labour_view
+
+        view = self.admin_site.admin_view(lambda request: labour_view(self, request))
+        # The changelist name puts it in the admin's Labour section; labour_view is the name used in links.
+        return [path("", view, name="labour_labourview_changelist"), path("", view, name="labour_view")]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.has_perm("labour.view_payrun")

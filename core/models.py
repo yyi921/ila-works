@@ -959,3 +959,89 @@ class Reconciliation(TenantModel):
         changed = bool(self.prepared_at or self.reviewed_at)
         self.prepared_by = self.prepared_at = self.reviewed_by = self.reviewed_at = None
         return changed
+
+
+# --- Overlay journals -------------------------------------------------------------------------------------------
+
+class Adjustment(TenantModel):
+    """An overlay journal (ADJ-0001): a journal iLA or a person proposes on top of Xero's actuals, e.g. a pay-run
+    journal, an accrual or a reclass. It sits in a bucket until it is in Xero:
+
+    * **Expected**: an estimate, for review (iLA may rebuild it while it's here);
+    * **To post**: approved, its import file to be built and imported;
+    * **Posted**: found in Xero; it leaves the buckets;
+    * **Superseded**: a journal posted in Xero by someone else covers it; iLA shows the difference;
+    * **Rejected**: kept with its reason.
+    """
+
+    class Status(models.TextChoices):
+        EXPECTED = "expected", "Expected"
+        TO_POST = "to_post", "To post"
+        POSTED = "posted", "Posted"
+        SUPERSEDED = "superseded", "Superseded"
+        REJECTED = "rejected", "Rejected"
+
+    number = models.PositiveIntegerField(editable=False)
+    date = models.DateField(help_text="The journal date.")
+    period_end = models.DateField(help_text="Last day of the month it belongs to.")
+    narration = models.CharField(max_length=255)
+    origin = models.CharField(max_length=30, help_text="What made it, e.g. labour.")
+    origin_ref = models.CharField(max_length=100, blank=True, help_text="e.g. the pay run it was built from.")
+    evidence = models.CharField(max_length=255, blank=True, help_text="e.g. the pay-run file.")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.EXPECTED)
+    made_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                related_name="+", help_text="Blank: made by iLA.")
+    superseded_by = models.ForeignKey(Journal, null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+                                      help_text="The journal in Xero that covers it.")
+    note = models.TextField(blank=True)
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.UniqueConstraint(fields=["organisation", "number"], name="core_adjustment_number_uniq")]
+        ordering = ["-number"]
+        verbose_name = "overlay journal"
+
+    def __str__(self):
+        return f"{self.reference} {self.narration} ({self.date:%d/%m/%Y})"
+
+    @property
+    def reference(self):
+        return f"ADJ-{self.number:04d}"
+
+    @property
+    def is_open(self):
+        """In a bucket (Expected or To post)."""
+        return self.status in (self.Status.EXPECTED, self.Status.TO_POST)
+
+    def save(self, *args, **kwargs):
+        if not self.number:
+            last = (Adjustment.objects.filter(organisation=self.organisation).order_by("-number")
+                    .values_list("number", flat=True).first())
+            self.number = (last or 0) + 1
+        super().save(*args, **kwargs)
+
+    @property
+    def debit_total(self):
+        return sum((line.amount for line in self.lines.all() if line.amount > 0), Decimal("0"))
+
+
+class AdjustmentLine(models.Model):
+    """One line of an overlay journal, as it would go into Xero: account, amount (debit positive) and up to two
+    tracking options. ``value`` is the dimension value the line carries (e.g. the event), if any."""
+
+    adjustment = models.ForeignKey(Adjustment, on_delete=models.CASCADE, related_name="lines")
+    line_number = models.PositiveIntegerField(default=0)
+    account_code = models.CharField(max_length=20)
+    description = models.CharField(max_length=255, blank=True)
+    amount = models.DecimalField(help_text="Signed: debit positive, credit negative.", **MONEY)
+    tracking_name1 = models.CharField(max_length=100, blank=True)
+    tracking_option1 = models.CharField(max_length=100, blank=True)
+    tracking_name2 = models.CharField(max_length=100, blank=True)
+    tracking_option2 = models.CharField(max_length=100, blank=True)
+    value = models.ForeignKey(DimensionValue, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+
+    class Meta:
+        ordering = ["adjustment", "line_number"]
+
+    def __str__(self):
+        return f"{self.account_code} {self.amount}"

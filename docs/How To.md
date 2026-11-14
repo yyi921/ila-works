@@ -296,7 +296,58 @@ Quarters and financial years follow the year end set in Xero.
   - Every line, with its days worked, is under Admin → Labour → Pay lines (filter by pay run or cost account).
   - `/labour` lists the latest pay runs, whether each is in Xero yet and the difference; `/labour --Oct 2026` those
     with days in October.
-  - Coming next: the Labour view (by employee, day and event), the pay-run journal, and labour by event.
+  - After the upload iLA builds the pay run's **journal** and names it (e.g. *ADJ-0004 31/10/2026 63,339.55,
+    ADJ-0005 01/11/2026 16,232.82 (Expected)*), with anything that stops its import file: see *Journal* below.
+  - Coming next: labour by event in the P&L (`/splittag --labour`).
+
+#### Labour view (Admin → Labour → Labour view) — labour by employee, day and event
+- **Purpose:** see where each month's labour goes, why, and change it. It's the base for the pay-run journal and for
+  sharing labour out by event.
+- **Choose** the month (and the organisation if you have several), and whether to include on-costs. Every pay run
+  with days in the month counts, but only its days in that month (FNE 1/11 gives October its 19–31 October).
+- **How iLA decides** (shown as *Why* against each day):
+  1. **Days:** each pay line is spread evenly over its days worked. Super follows the employee's wages, day by day;
+     payroll tax and workcover follow the pay they're on.
+  2. **Event:** for cost accounts that can go to an event, the first that applies: your change for that employee →
+     your change for the whole day → an **event day** → a **bump day** (± bump days, set on the Event dimension or
+     the event) → a **season** (e.g. 2627FIRE) → **No event** (Unassigned). Several events on one day share it
+     equally. Fixed Wages, Event Sales and other cost accounts that can't go to an event are always Unassigned
+     (*Not taggable*).
+- **Tabs:**
+  - **By employee:** one row per employee, a column per event, Unassigned and Total. Click a name to see their days
+    (cost account, pay components, hours, $, where it went and why) and to **change** where a range of their days
+    goes (an event, or Unassigned), with a note. Remove a change to go back to iLA's choice.
+  - **By day:** one row per day with the calendar (event, bump and season days), $ per event, Unassigned and Not
+    taggable. **Set whole days** to an event for everyone working them, e.g. a busy day with no event in the
+    calendar. Better still, add the event's dates (Core → Dimension values) so iLA finds it itself.
+  - **By event:** one row per event with its dates, employees, hours, wages, super, on-costs and total, then
+    Unassigned (split into not taggable and no event).
+  - **Journal:** each pay run with days in the month, as Xero manual journals (see below), and **Download import
+    file**.
+- The tabs add up to the same total (the Journal tab's month can differ by a cent of rounding). Every change is kept
+  under Admin → Labour → Labour changes and in the audit log.
+
+#### The pay-run journal (Labour view → Journal)
+- **What it is:** the pay run as Xero manual journals, built from the Labour view: lines by **GL account ×
+  department × event**, the on-costs (payroll tax, workcover) on the same department and events as the pay, and one
+  credit to the payroll clearing account (2350). Narration from Labour settings, e.g. *Ville for TECC Payroll Journal
+  FNE: 1/11/2026*.
+- **One journal per month:** a pay run's days in an earlier month post on that month's last day, the rest on the
+  pay-run end date. FNE 1/11/2026 (19 Oct – 1 Nov) gives **31/10/2026** and **1/11/2026**, both in one file.
+- **Ties:** lines are rounded to the cent and any cent left over goes to the largest line, so the pay ties to the
+  pay-run total and each on-cost to its rate × the pay-run total, exactly as `/labour` shows them.
+- **Overlay journals:** each month's journal is kept as **ADJ-nnnn** (Admin → Core → Overlay journals), made by
+  labour, in the **Expected** bucket. While Expected, iLA rebuilds it whenever the pay run, the event dates or your
+  labour changes move; its number stays the same.
+- **Superseded:** when the accountant's own payroll journal for the pay run is in Xero (narration with FNE and the
+  end date), iLA's journals are marked **Superseded** and the tab shows iLA against Xero **by account and
+  department**. (Today TECC's journal puts all payroll tax and workcover on Overhead & Venue Costs; iLA's follows
+  the pay.)
+- **Download import file** (one CSV for all the pay run's journals; Xero → Accounting → Manual journals → Import) is
+  offered only when the checks pass: every cost account has a department in Xero, every pay component a GL account in
+  the chart, the clearing account and on-cost rates are set, the Event dimension is linked to Xero's Event tracking,
+  **every event used is an Event option in Xero** (add a new one in Xero first, then refresh), and the file ties.
+  iLA never posts to Xero.
 
 ### Month-end accruals
 
@@ -759,6 +810,8 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 14 Nov 2026 | Added the **pay-run journal** (Labour view → Journal): one Xero manual journal per month a pay run covers, by account × department × event with on-costs, credited to 2350, rounded to tie; kept as overlay journals (ADJ-nnnn, Expected), superseded by the payroll journal posted in Xero with the difference by account and department; *Download import file* once the checks pass. `/labour << file` names the journals. |
+| 14 Nov 2026 | Added the **Labour view** (Admin → Labour): the month's labour by employee, day and event, with why each day went where it did; change an employee's days or whole days to an event or Unassigned. |
 | 14 Nov 2026 | The GL account now comes from the **pay component** (Micropay's Pay Comp/Add Ded Code), set in Admin → Labour → Pay components (with CSV upload and download); cost accounts set the department and whether the cost can go to an event. The pay-run summary shows a *By pay component* table. |
 | 14 Nov 2026 | Cost accounts can be downloaded and uploaded as a CSV (Admin → Labour → Cost accounts), checked against Xero's departments and the chart before anything is saved. |
 | 14 Nov 2026 | Added `/labour` and Admin → Labour: upload a pay-run file (Micropay employee breakdown), checked against its Summary total and the payroll journal in Xero; cost accounts mapped to department, GL and whether they can go to an event; on-cost rates learned from Xero. |

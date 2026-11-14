@@ -316,3 +316,38 @@ class DimensionAdmin(admin.ModelAdmin):
         missing = obj.values.filter(start_date__isnull=True).count()
         return format_html('<a href="{}">{} values</a> ({} without dates)', url, obj.values.count(), missing)
 
+
+
+class AdjustmentLineInline(admin.TabularInline):
+    model = models.AdjustmentLine
+    fields = ("account_code", "description", "tracking_option1", "tracking_option2", "amount")
+    readonly_fields = fields
+    extra = 0
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(models.Adjustment)
+class AdjustmentAdmin(admin.ModelAdmin):
+    """Overlay journals (ADJ-nnnn): read here; made and changed by the commands and pages that own them."""
+
+    list_display = ("reference", "organisation", "date", "narration", "origin", "status", "debit_total")
+    list_filter = ("organisation", "origin", "status")
+    search_fields = ("narration", "evidence")
+    fields = ("organisation", "date", "period_end", "narration", "origin", "origin_ref", "evidence", "status",
+              "made_by", "superseded_by", "note")
+    readonly_fields = fields
+    inlines = [AdjustmentLineInline]
+
+    @admin.display(description="Number", ordering="number")
+    def reference(self, obj):
+        return obj.reference
+
+    @admin.display(description="Debits")
+    def debit_total(self, obj):
+        return f"{obj.debit_total:,.2f}"
+
+    def has_add_permission(self, request):
+        return False
