@@ -1,0 +1,67 @@
+{% extends "admin/change_form.html" %}
+
+{% block after_field_sets %}
+{% if cost_accounts %}
+<div class="module">
+  <h2>By cost account</h2>
+  <table style="width:100%">
+    <thead><tr><th>Cost account</th><th>Department</th><th>Can go to an event</th><th>GL</th>
+      <th style="text-align:right">Employees</th><th style="text-align:right">Hours</th>
+      <th style="text-align:right">Amount</th></tr></thead>
+    <tbody>
+    {% for account, employees, hours, amount in cost_accounts %}
+      <tr><td>{{ account }}</td>
+        <td>{{ account.department|default:"<em>not set</em>" }}</td>
+        <td>{{ account.taggable|yesno:"Yes,No" }}</td>
+        <td>{{ account.gl_account|default:"<em>not set</em>" }}</td>
+        <td style="text-align:right">{{ employees }}</td>
+        <td style="text-align:right">{{ hours|floatformat:"2g" }}</td>
+        <td style="text-align:right">{{ amount|floatformat:"2g" }}</td></tr>
+    {% endfor %}
+    <tr><th colspan="6">Total</th><th style="text-align:right">{{ original.total|floatformat:"2g" }}</th></tr>
+    </tbody>
+  </table>
+  <p><a href="{{ lines_url }}">See every line</a> · <a href="{{ cost_accounts_url }}">Cost accounts</a> ·
+    <a href="{{ settings_url }}">Labour settings</a></p>
+</div>
+
+<div class="module">
+  <h2>By GL account</h2>
+  <table style="width:100%">
+    <thead><tr><th>GL</th><th style="text-align:right">Amount</th></tr></thead>
+    <tbody>
+    {% for code, amount in gl_rows %}
+      <tr><td>{{ code }}</td><td style="text-align:right">{{ amount|floatformat:"2g" }}</td></tr>
+    {% endfor %}
+    {% for cost, amount, rate in on_costs %}
+      <tr><td>{{ cost.account }} ({{ cost.name }}{% if rate %} at {{ rate }}{% endif %})</td>
+        <td style="text-align:right">{% if amount is None %}<em>rate not set</em>{% else %}{{ amount|floatformat:"2g" }}{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="module">
+  <h2>Against the payroll journal in Xero</h2>
+  {% if comparison %}
+  <p>{{ original.xero_journal.narration }} ({{ original.xero_journal.date|date:"d/m/Y" }})</p>
+  <table style="width:100%">
+    <thead><tr><th>GL</th><th>Account</th><th style="text-align:right">iLA</th><th style="text-align:right">Xero</th>
+      <th style="text-align:right">Difference</th></tr></thead>
+    <tbody>
+    {% for code, name, ila, xero, diff in comparison.0 %}
+      <tr><td>{{ code }}</td><td>{{ name }}</td><td style="text-align:right">{{ ila|floatformat:"2g" }}</td>
+        <td style="text-align:right">{{ xero|floatformat:"2g" }}</td>
+        <td style="text-align:right">{{ diff|floatformat:"2g" }}</td></tr>
+    {% endfor %}
+    <tr><th colspan="2">Total</th><th style="text-align:right">{{ comparison.1.0|floatformat:"2g" }}</th>
+      <th style="text-align:right">{{ comparison.1.1|floatformat:"2g" }}</th>
+      <th style="text-align:right">{{ comparison.1.2|floatformat:"2g" }}</th></tr>
+    </tbody>
+  </table>
+  {% else %}
+  <p>Not in Xero yet (as at iLA's last copy of Xero's journals).</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
