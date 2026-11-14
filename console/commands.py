@@ -13,7 +13,7 @@ from xero.api import XeroAPIError, XeroScopeMissing
 from .builder import active_commands
 from .output import DATE, MONEY, NUMBER, PCT, TEXT, Column, Figure, Figures, Note, Result, Table
 from .output import fmt_money as _m
-from .periods import Period, add_months, fmt, month_period, window
+from .periods import Period, PeriodError, add_months, fmt, month_period, parse_period, window
 from .reconcile import RECON_NOTE
 from .reconcile import recon_table as _recon_table
 from .registry import COMMANDS, CommandError, as_at_date, command, lookup, positive_int, read_params
@@ -244,6 +244,16 @@ def pl(ctx, cmd):
             dimensions.setdefault(d.name.lower(), d)
     if cmd.text.startswith("-"):
         raise CommandError(f'Use two dashes: /pl --{cmd.text.lstrip("-")}')
+    if cmd.text:  # "/pl Oct 26 --by event": the period without its dashes
+        try:
+            found = parse_period(cmd.text, today=ctx.today, fy=ctx.fy)
+        except PeriodError:
+            found = None
+        if found is None:
+            raise CommandError(f'"{cmd.text}" isn\'t a period I recognise. Put the period after "--", e.g. '
+                               "/pl --Oct 2026 --by event.")
+        cmd.params = [cmd.text] + list(cmd.params)
+        cmd.text = ""
     params = read_params(cmd, ctx, flags=set(WINDOWS) | (set(dimensions) - set(WINDOWS)), period=True,
                          exclusive=[WINDOWS], keyed={"by": lambda value, _: value.strip()})
     chosen = [dimensions[f] for f in params.flags if f in dimensions]

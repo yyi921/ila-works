@@ -119,6 +119,12 @@ def test_pl_by_account_with_budget_and_last_year():
     assert "Bank" not in " ".join(str(r[1]) for r in table(result).rows)  # balance sheet budget lines ignored
 
 
+def test_pl_period_without_dashes_is_read_or_refused():
+    assert run("/pl Sep 26").title == "Profit and loss: September 2026"
+    with pytest.raises(CommandError, match="isn't a period I recognise"):
+        run("/pl oc 26 --by event")
+
+
 def test_pl_windows_are_exclusive():
     with pytest.raises(CommandError, match="only one"):
         run("/pl --mtd --ytd")
