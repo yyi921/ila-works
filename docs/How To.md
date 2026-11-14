@@ -844,6 +844,7 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 14 Nov 2026 | `/pl` reads a period typed without dashes (`/pl Oct 26 --by event`); anything else typed there (e.g. `/pl oc 26`) is an error instead of being ignored, which used to show this month to date. |
 | 14 Nov 2026 | Added `/labour --<month>` (the month's labour from the pay runs plus an estimate for days with no pay run yet, against Xero; by account, department, event and pay run) and `/splittag --labour --<month>` (variance first, then tags the month's labour accounts by each event's share of the pay runs). The stub estimate is an Expected overlay journal, replaced when the pay run arrives. `labour` is no longer a name for your own split rules (an existing one runs with `--rule labour`); the template's sample rule is now `wages`. |
 | 14 Nov 2026 | Added the **pay-run journal** (Labour view → Journal): one Xero manual journal per month a pay run covers, by account × department × event with on-costs, credited to 2350, rounded to tie; kept as overlay journals (ADJ-nnnn, Expected), superseded by the payroll journal posted in Xero with the difference by account and department; *Download import file* once the checks pass. `/labour << file` names the journals. |
 | 14 Nov 2026 | Added the **Labour view** (Admin → Labour): the month's labour by employee, day and event, with why each day went where it did; change an employee's days or whole days to an event or Unassigned. |
