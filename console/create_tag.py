@@ -21,6 +21,7 @@ from django.urls import reverse
 from django.utils.text import slugify
 
 from core.models import AuditLog, Dimension, DimensionValue, SourceSystem, TrackingCategory, TrackingOption
+from core.tagging import reapply_tracking
 from xero.api import XeroAPIError
 
 from .models import TagDraft
@@ -33,6 +34,18 @@ APPROVE_WORDS = {"approve", "approved", "ok approve", "yes approve"}
 CANCEL_WORDS = {"cancel", "/cancel", "stop", "quit"}
 KEEP_WORDS = {"ok", "okay", "yes", "keep", "keep it", "same"}
 BASE_COLUMNS = {"code", "name", "description", "active"}
+# Columns for the value's own dates (any of these headings, ignoring capitals) rather than extra fields.
+DATE_COLUMNS = {
+    "start date": "start_date", "start": "start_date", "date": "start_date", "event date": "start_date",
+    "end date": "end_date", "end": "end_date", "finish date": "end_date", "finish": "end_date",
+    "bump-in days": "bump_in_days", "bump in days": "bump_in_days", "bump-in": "bump_in_days",
+    "bump-out days": "bump_out_days", "bump out days": "bump_out_days", "bump-out": "bump_out_days",
+    "season": "season",
+}
+DATE_LABELS = {"start_date": "Start", "end_date": "End", "bump_in_days": "Bump-in", "bump_out_days": "Bump-out",
+               "season": "Season"}
+MAX_BUMP_DAYS = 60
+TEMPLATE_HEADINGS = {"bump_in_days": "Bump-in days", "bump_out_days": "Bump-out days", "season": "Season"}
 TRUE_WORDS = {"yes", "y", "true", "1", "active"}
 FALSE_WORDS = {"no", "n", "false", "0", "archived", "inactive"}
 DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d %b %Y", "%d %B %Y")
@@ -255,7 +268,7 @@ def parse_values(text, target, dimension=None):
     existing_fields = {f["key"]: f for f in (dimension.attribute_fields if dimension else [])}
     extra = []  # (column index, field key, label)
     for i, h in enumerate(headers):
-        if h and h.lower() not in BASE_COLUMNS:
+        if h and h.lower() not in BASE_COLUMNS and h.lower() not in DATE_COLUMNS:
             key = next((k for k, f in existing_fields.items() if (f.get("label") or k).lower() == h.lower()),
                        _field_key(h))
             if any(key == k for _, k, _ in extra):
@@ -287,16 +300,22 @@ def parse_values(text, target, dimension=None):
     taken = {cell(row, "code").lower() for _, row in data_rows} | set(options)
     if dimension is not None:
         taken |= {v.code.lower() for v in dimension.values.all()}
-    date_column = _date_column(fields, extra)
+    date_cols = {}  # field -> column index
+    for i, h in enumerate(headers):
+        field = DATE_COLUMNS.get(h.lower())
+        if field and field in date_cols:
+            problems.append(f'Two columns give the {DATE_LABELS[field].lower()}: keep one.')
+        elif field:
+            date_cols[field] = i
     rows, seen, made = [], {}, []
     for n, row in data_rows:
         code, name = cell(row, "code"), cell(row, "name")
         if not code and not name:
             problems.append(f"Row {n}: Code and Name are both empty.")
             continue
+        dates, date_problems = _read_dates(row, date_cols, cell)
         if not code:
-            code = make_code(name, _convert(cell(row, date_column), Dimension.AttributeType.DATE)
-                             if date_column is not None else None, taken)
+            code = make_code(name, dates.get("start_date"), taken)
             taken.add(code.lower())
             made.append(code)
         if len(code) > 100:
@@ -327,10 +346,11 @@ def parse_values(text, target, dimension=None):
         for f in fields:
             if f.get("required") and f["key"] not in attributes:
                 problems.append(f"Row {n} ({code}): {f['label']} is required.")
+        problems += [f"Row {n} ({code}): {p}" for p in date_problems]
         option = options.get(code.lower())
         rows.append({"code": option["name"] if option else code, "name": name,
                      "description": cell(row, "description"), "active": active_text not in FALSE_WORDS,
-                     "attributes": attributes, "option": option["name"] if option else ""})
+                     "attributes": attributes, "dates": dates, "option": option["name"] if option else ""})
 
     if made:
         linked = [c for c in made if c.lower() in options]
@@ -359,12 +379,35 @@ def parse_values(text, target, dimension=None):
     return {"rows": rows, "fields": fields, "problems": problems, "warnings": warnings}
 
 
-def _date_column(fields, extra):
-    """The column index of the date to build codes from: a date field whose name says start, else the first one."""
-    dates = [(i, label) for i, key, label in extra
-             if next(f["type"] for f in fields if f["key"] == key) == Dimension.AttributeType.DATE]
-    starts = [i for i, label in dates if "start" in label.lower()]
-    return (starts or [i for i, _ in dates] or [None])[0]
+def _read_dates(row, date_cols, cell):
+    """({field: value} for the date cells filled in on this row, [problems]). Dates are kept as YYYY-MM-DD."""
+    dates, problems = {}, []
+    for field, i in date_cols.items():
+        text = cell(row, i)
+        if not text:
+            continue
+        if field in ("start_date", "end_date"):
+            value = _convert(text, Dimension.AttributeType.DATE)
+            if value is None:
+                problems.append(f"{DATE_LABELS[field]} must be a date (e.g. 30/06/2026), not {text}.")
+                continue
+        elif field == "season":
+            value = _convert(text, Dimension.AttributeType.BOOLEAN)
+            if value is None:
+                problems.append(f"Season must be yes or no, not {text}.")
+                continue
+        else:
+            value = _convert(text, Dimension.AttributeType.NUMBER)
+            if not isinstance(value, int) or not 0 <= value <= MAX_BUMP_DAYS:
+                problems.append(f"{DATE_LABELS[field]} days must be a whole number from 0 to {MAX_BUMP_DAYS}, "
+                                f"not {text}.")
+                continue
+        dates[field] = value
+    if dates.get("end_date") and not dates.get("start_date"):
+        problems.append("End is given without a Start.")
+    elif dates.get("end_date") and dates["end_date"] < dates["start_date"]:
+        problems.append("End is before Start.")
+    return dates, problems
 
 
 def make_code(name, iso_date, taken):
@@ -427,14 +470,21 @@ def template_csv(draft):
     writer = csv.writer(out)
     dimension, target = draft.dimension, draft.data.get("target") or {}
     fields = list(dimension.attribute_fields) if dimension else []
-    writer.writerow(["Code", "Name", "Description", "Active"] + [f.get("label") or f["key"] for f in fields])
     current = {v.code.lower(): v for v in dimension.values.all()} if dimension else {}
+    # Start and end always; bump days and season only when some value already has its own.
+    extra_dates = [k for k in ("bump_in_days", "bump_out_days", "season")
+                   if any(getattr(v, k) is not None for v in current.values())]
+    writer.writerow(["Code", "Name", "Description", "Active", "Start date", "End date"]
+                    + [TEMPLATE_HEADINGS[k] for k in extra_dates] + [f.get("label") or f["key"] for f in fields])
     written = set()
 
     def write(code, value, active):
         attrs = value.attributes if value else {}
         writer.writerow([code, value.name if value else "", value.description if value else "",
-                         "yes" if active else "no"]
+                         "yes" if active else "no",
+                         _template_cell(value.start_date.isoformat()) if value and value.start_date else "",
+                         _template_cell(value.end_date.isoformat()) if value and value.end_date else ""]
+                        + [_template_cell(getattr(value, k)) if value else "" for k in extra_dates]
                         + [_template_cell(attrs.get(f["key"])) for f in fields])
         written.add(code.lower())
 
@@ -447,8 +497,16 @@ def template_csv(draft):
         if code not in written:
             write(v.code, v, v.is_active)
     if not written:
-        writer.writerow(["CN26", "Celtic Nights 2026", "Concert, main arena", "yes"])
+        writer.writerow(["CN26", "Celtic Nights 2026", "Concert, main arena", "yes", "14/03/2026", ""])
     return "﻿" + out.getvalue()
+
+
+def _stored(value, field):
+    """A value's saved date field in the form a file gives it (dates as YYYY-MM-DD; end = start when blank)."""
+    if field == "end_date":
+        return value.last_date.isoformat() if value.last_date else None
+    stored = getattr(value, field)
+    return stored.isoformat() if isinstance(stored, date) else stored
 
 
 def _display(value):
@@ -476,12 +534,13 @@ def _approve(ctx, draft):
             dimension, counts = _save(ctx, draft, target, data)
     except ValidationError as exc:
         return show(ctx, draft, intro="Not saved: " + "; ".join(exc.messages))
+    retagged = reapply_tracking(dimension, counts.pop("linked"))
     draft.dimension, draft.status = dimension, TagDraft.Status.APPROVED
     draft.save()
     AuditLog.objects.create(organisation=ctx.organisation, user=ctx.user, action=AuditLog.Action.APPROVAL,
                             input=f"createTag {dimension.name} from {data.get('file', '')}",
                             target_type="core.dimension", target_id=str(dimension.pk),
-                            result={"replaces": dimension.source_name, **counts})
+                            result={"replaces": dimension.source_name, "retagged": retagged, **counts})
 
     result = Result(f"Saved: {dimension.name}",
                     subtitle=(f"Replaces Xero's {dimension.source_name} tracking in iLA. Xero hasn't changed."
@@ -492,6 +551,9 @@ def _approve(ctx, draft):
     if target.get("kind") == "replace":
         figures.append(Figure("Named by Xero code", str(counts["from_xero"]), TEXT,
                               detail="Active Xero options that weren't in the file"))
+    if retagged:
+        figures.append(Figure("Transactions re-tagged", str(retagged), TEXT,
+                              detail="Already copied from Xero with these codes; now tagged to them"))
     result.add(Figures(figures))
     result.add(Note(f"Type /dim {dimension.name} to see its values. To change them later, run /createTag "
                     f"{dimension.name} again with an updated file, or edit them on the admin page (Dimensions)."))
@@ -517,6 +579,7 @@ def _save(ctx, draft, target, data):
 
     existing = {v.code.lower(): v for v in dimension.values.all()}
     counts = {"created": 0, "updated": 0, "unchanged": 0, "from_xero": 0}
+    linked = []  # Xero options newly linked to a value: their copied lines get tagged
     for row in data["rows"]:
         value = existing.get(row["code"].lower())
         before = _snapshot(value)
@@ -524,8 +587,15 @@ def _save(ctx, draft, target, data):
             value = DimensionValue(organisation=org, dimension=dimension, code=row["code"])
         value.name, value.description, value.is_active = row["name"], row["description"], row["active"]
         value.attributes = {**(value.attributes or {}), **row["attributes"]}
+        for field, given in (row.get("dates") or {}).items():
+            setattr(value, field, date.fromisoformat(given) if field in ("start_date", "end_date") else given)
+        if value.end_date and value.end_date == value.start_date:
+            value.end_date = None
         if row["option"]:
-            value.tracking_option = options.get(row["option"].lower())
+            option = options.get(row["option"].lower())
+            if option is not None and value.tracking_option_id != option.pk:
+                linked.append(option.pk)
+            value.tracking_option = option
         value.full_clean()
         if before is None:
             counts["created"] += 1
@@ -540,16 +610,20 @@ def _save(ctx, draft, target, data):
             DimensionValue.objects.create(organisation=org, dimension=dimension, code=option.name, name=option.name,
                                           tracking_option=option)
             counts["from_xero"] += 1
+            linked.append(option.pk)
         elif key in existing and existing[key].tracking_option_id is None:
             existing[key].tracking_option = option
             existing[key].save(update_fields=["tracking_option"])
+            linked.append(option.pk)
+    counts["linked"] = linked
     return dimension, counts
 
 
 def _snapshot(value):
     if value is None or value.pk is None:
         return None
-    return (value.name, value.description, value.is_active, value.attributes, value.tracking_option_id)
+    return (value.name, value.description, value.is_active, value.attributes, value.tracking_option_id,
+            value.start_date, value.end_date, value.bump_in_days, value.bump_out_days, value.season)
 
 
 def _unique_code(org, name):
@@ -597,8 +671,14 @@ FORMAT_ROWS = (
     ("Name", "Yes", "The name people should see, e.g. Celtic Nights 2026."),
     ("Description", "No", "Anything that helps people pick the right one."),
     ("Active", "No", "yes or no (blank means yes). No hides it from new tagging."),
-    ("Any other column", "No", "Becomes an extra field, e.g. Venue, Event date (30/06/2026), Capacity, Ticketed "
-                               "(yes/no). Its type is worked out from the values."),
+    ("Start date, End date", "No", "The event's first and last day (30/06/2026). End can be empty for a one-day "
+                                   "event. Used to tag by date and to share out labour by event."),
+    ("Bump-in days, Bump-out days", "No", "Set-up and pack-down days around this event, if not the usual (2 each, "
+                                          "set on the dimension in admin)."),
+    ("Season", "No", "yes for a long-running value such as a sports season: it only takes a day when nothing else "
+                     "is on. Blank: worked out from its length."),
+    ("Any other column", "No", "Becomes an extra field, e.g. Venue, Capacity, Ticketed (yes/no). Its type is worked "
+                               "out from the values."),
 )
 
 
@@ -676,6 +756,8 @@ def _show_rows(result, draft):
     columns = [Column("Code"), Column("Name"), Column("Description")]
     if replace:
         columns.append(Column("In Xero"))
+    date_fields = [k for k in DATE_LABELS if any(k in (r.get("dates") or {}) for r in data["rows"])]
+    columns += [Column(DATE_LABELS[k]) for k in date_fields]
     columns += [Column(f["label"]) for f in fields] + [Column("Active"), Column("Change")]
     table = result.add(Table(columns, title=f"Values ({len(data['rows'])})"))
     for r in data["rows"]:
@@ -683,13 +765,15 @@ def _show_rows(result, draft):
         if existing is None:
             change = "New"
         elif (existing.name, existing.description, existing.is_active) != (r["name"], r["description"], r["active"]) \
-                or any(existing.attributes.get(k) != v for k, v in r["attributes"].items()):
+                or any(existing.attributes.get(k) != v for k, v in r["attributes"].items()) \
+                or any(_stored(existing, k) != v for k, v in (r.get("dates") or {}).items()):
             change = "Updated"
         else:
             change = "No change"
         cells = [r["code"], r["name"], r["description"]]
         if replace:
             cells.append("Yes" if r["option"] else "No")
+        cells += [_display((r.get("dates") or {}).get(k)) for k in date_fields]
         cells += [_display(r["attributes"].get(f["key"])) for f in fields]
         table.add(*cells, "Yes" if r["active"] else "No", change)
     new_fields = [f for f in data.get("fields", []) if f["key"] not in

@@ -1,5 +1,6 @@
 import csv
 import io
+from datetime import date
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -77,13 +78,13 @@ def test_replace_xero_category_end_to_end(client, org):
 
     result = say(client, "<< events.csv", [csv_file(EVENT_ROWS)])
     rows = tables(result)["Values (2)"]
-    assert rows[0] == ["Celtic Nights", "Celtic Nights 2026", "Irish dance show", "Yes", "Arena", "14/03/2026",
+    assert rows[0] == ["Celtic Nights", "Celtic Nights 2026", "Irish dance show", "Yes", "14/03/2026", "Arena",
                        "4500", "Yes", "Yes", "New"]
     assert rows[1][3] == "No"  # XMAS26 isn't a Xero option
     text = notes(result)
     assert "XMAS26" in text and "iLA-only" in text
     assert "Gala Dinner" in text  # active Xero option missing from the file
-    assert "Event date (a date" in text and "Capacity (a number)" in text and "Ticketed (yes or no)" in text
+    assert "Event date" not in text and "Capacity (a number)" in text and "Ticketed (yes or no)" in text
     assert not Dimension.objects.exists()  # nothing saved before approval
 
     result = say(client, "approve")
@@ -95,7 +96,8 @@ def test_replace_xero_category_end_to_end(client, org):
     assert set(values) == {"Celtic Nights", "XMAS26", "Gala Dinner"}
     cn = values["Celtic Nights"]
     assert cn.name == "Celtic Nights 2026" and cn.tracking_option.source_id == "to-cn"
-    assert cn.attributes == {"venue": "Arena", "event_date": "2026-03-14", "capacity": 4500, "ticketed": True}
+    assert cn.attributes == {"venue": "Arena", "capacity": 4500, "ticketed": True}
+    assert cn.start_date == date(2026, 3, 14) and cn.end_date is None  # "Event date" is the event's own date
     assert values["XMAS26"].tracking_option is None
     assert values["Gala Dinner"].name == "Gala Dinner" and values["Gala Dinner"].tracking_option.source_id == "to-gd"
     assert TrackingOption.objects.filter(source_id="to-os", is_active=False).exists()
@@ -159,8 +161,8 @@ def test_template_has_xero_codes_to_fill_in(client, org):
     response = client.get(result["link"])
     body = response.content.decode("utf-8-sig")
     assert response["Content-Disposition"] == 'attachment; filename="Event values.csv"'
-    assert body.splitlines() == ["Code,Name,Description,Active", "Celtic Nights,,,yes", "Gala Dinner,,,yes",
-                                 "Old Show,,,no"]
+    assert body.splitlines() == ["Code,Name,Description,Active,Start date,End date", "Celtic Nights,,,yes,,",
+                                 "Gala Dinner,,,yes,,", "Old Show,,,no,,"]
     other = get_user_model().objects.create_user("other", password="pw")
     org[0].members.add(other)
     client.force_login(other)
@@ -220,20 +222,6 @@ def test_codes_are_unique_ignoring_case(org):
         DimensionValue(organisation=org[0], dimension=dim, code="cch1221", name="Copy").full_clean()
     other = Dimension.objects.create(organisation=org[0], code="venue", name="Venue")
     DimensionValue(organisation=org[0], dimension=other, code="CCH1221", name="Fine in another dimension").full_clean()
-
-
-def test_admin_rejects_duplicate_codes_on_one_page(client, org):
-    admin_user = get_user_model().objects.create_superuser("boss", password="pw")
-    client.force_login(admin_user)
-    form = {"organisation": org[0].pk, "code": "venue", "name": "Venue", "is_active": "on",
-            "source_name": "", "attribute_fields": "[]",
-            "values-TOTAL_FORMS": "2", "values-INITIAL_FORMS": "0",
-            "values-0-code": "ARENA", "values-0-name": "Arena", "values-0-attributes": "{}", "values-0-is_active": "on",
-            "values-1-code": "arena", "values-1-name": "Arena again", "values-1-attributes": "{}"}
-    response = client.post("/admin/core/dimension/add/", form)
-    assert response.status_code == 200
-    assert "Code arena is already used by Arena on this page" in response.content.decode()
-    assert not Dimension.objects.filter(code="venue").exists()
 
 
 def test_name_and_file_in_one_command(client, org):

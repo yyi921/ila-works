@@ -104,17 +104,15 @@ def event(org):
                                            source_system="xero", source_id="to-cn")
     dim = Dimension.objects.create(
         organisation=org, code="event", name="Event", tracking_category=category, replaces_source=True,
-        source_name="Event", attribute_fields=[{"key": "start_date", "label": "Start date", "type": "date"},
-                                               {"key": "end_date", "label": "End date", "type": "date"}])
+        source_name="Event")
     for code, name, first, last, opt in [
         ("Celtic Nights", "Celtic Nights 2026", "2026-03-14", "2026-03-14", option),
         ("260328ABB", "ABBA", "2026-03-28", "2026-03-28", None),
         ("260331ADF", "ADF Transition Seminar", "2026-03-31", "2026-03-31", None),
         ("XMAS", "Christmas Party", None, None, None),
     ]:
-        attrs = {"start_date": first, "end_date": last} if first else {}
         DimensionValue.objects.create(organisation=org, dimension=dim, code=code, name=name, tracking_option=opt,
-                                      attributes=attrs)
+                                      start_date=first, end_date=last)
     return dim
 
 
@@ -271,7 +269,7 @@ def test_a_distinctive_word_beats_the_same_supplier(client, org, data, event):
     for code, first in [("260826MEC", "2026-08-26"), ("260902MEC", "2026-09-02"), ("260910COW", "2026-09-12")]:
         name = "Cowboys Presentation Night" if code.endswith("COW") else "MECCA Training"
         DimensionValue.objects.create(organisation=org[0], dimension=event, code=code, name=name,
-                                      attributes={"start_date": first, "end_date": first})
+                                      start_date=first)
     data["invoices"] += [
         doc("w3844", "ACCPAY", "PAID", "2026-09-18", "Wild Gravity", [line("End of season AV", "310", "9283.00")]),
         doc("w3825", "ACCPAY", "PAID", "2026-09-09", "Wild Gravity", [line("Mecca", "310", "3312.00")]),

@@ -15,14 +15,14 @@ posting means a person imports the stamped file.
 
 import csv
 import io
-import re
 import statistics
-from datetime import date, timedelta
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
 
+from core.event_dates import code_date
 from core.models import AuditLog, DimensionValue, Document, DocumentLine, ImportFile, SourceSystem
 
 from .models import TO_POST, Behaviour, Decision, Expectation, LedgerJournal, Method, State
@@ -169,7 +169,6 @@ def cut_off_days(profile, period_end):
     return max(1, min(days, profile.accrual.bill_window_days))
 
 
-CODE_DATE = re.compile(r"^(\d{2})(\d{2})(\d{2})")  # event codes that start with the date: 261008MEL = 8 Oct 2026
 
 
 def event_dates(organisation):
@@ -177,20 +176,13 @@ def event_dates(organisation):
     date the option's name starts with (YYMMDD)."""
     from core.models import TrackingOption
 
-    dates = {}
-    for value in DimensionValue.objects.filter(organisation=organisation, tracking_option__isnull=False):
-        start = (value.attributes or {}).get("start_date") or (value.attributes or {}).get("date")
-        try:
-            dates[value.tracking_option_id] = date.fromisoformat(str(start)[:10])
-        except ValueError:
-            continue
+    dates = dict(DimensionValue.objects.filter(organisation=organisation, tracking_option__isnull=False,
+                                               start_date__isnull=False)
+                 .values_list("tracking_option_id", "start_date"))
     for option in TrackingOption.objects.filter(organisation=organisation).exclude(pk__in=list(dates)):
-        m = CODE_DATE.match(option.name.strip())
-        if m:
-            try:
-                dates[option.pk] = date(2000 + int(m.group(1)), int(m.group(2)), int(m.group(3)))
-            except ValueError:
-                continue
+        found = code_date(option.name)
+        if found:
+            dates[option.pk] = found
     return dates
 
 

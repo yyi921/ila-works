@@ -1,0 +1,40 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+  &rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+  &rsaquo; Suggested dates
+</div>
+{% endblock %}
+
+{% block content %}
+<p>Untick any that look wrong, then save. Nothing is saved until you do. Values that already have dates aren't
+  changed.{% if without %} {{ without }} selected value(s) without dates had nothing to go on: type their dates in
+  the list.{% endif %}</p>
+<form method="post">{% csrf_token %}
+  {% for pk in selected %}<input type="hidden" name="_selected_action" value="{{ pk }}">{% endfor %}
+  <input type="hidden" name="action" value="suggest_dates">
+  <input type="hidden" name="select_across" value="{{ select_across }}">
+  <input type="hidden" name="apply" value="1">
+  <table>
+    <thead><tr><th>Use</th><th>Code</th><th>Name</th><th>Start</th><th>End</th><th>From</th></tr></thead>
+    <tbody>
+    {% for s in suggestions %}
+      <tr>
+        <td><input type="checkbox" name="use" value="{{ s.value.pk }}" checked></td>
+        <td>{{ s.value.code }}</td>
+        <td>{{ s.value.name }}</td>
+        <td>{{ s.start|date:"d/m/Y" }}</td>
+        <td>{{ s.end|date:"d/m/Y" }}</td>
+        <td>{{ s.source }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p><input type="submit" class="default" value="Save these dates">
+    <a href="{% url opts|admin_urlname:'changelist' %}" class="button cancel-link">Cancel</a></p>
+</form>
+{% endblock %}

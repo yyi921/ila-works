@@ -3,7 +3,9 @@
 import calendar
 from decimal import Decimal
 
-from core.models import DocumentLine, Event
+from django.db.models import Q
+
+from core.models import DimensionValue, DocumentLine
 
 import statistics
 
@@ -69,7 +71,11 @@ def driver_volume(p, start, end):
         n = len(set(options))
         if n:
             return n, f"{n} {p.driver.lower() or 'driver'}s on sales invoices"
-    events = Event.objects.filter(organisation=p.organisation, start_date__lte=end, end_date__gte=start).count()
+    dated = DimensionValue.objects.filter(organisation=p.organisation, start_date__lte=end).filter(
+        Q(end_date__gte=start) | Q(end_date__isnull=True, start_date__gte=start))
+    if p.driver:
+        dated = dated.filter(dimension__name__iexact=p.driver)
+    events = dated.count()
     if events:
         return events, f"{events} events in the calendar"
     return 0, ""

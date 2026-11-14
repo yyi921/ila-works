@@ -243,8 +243,7 @@ def _pending(ctx, dimension, period):
 
 
 def _start(value, dimension):
-    dates = [f["key"] for f in dimension.attribute_fields if f.get("type") == "date"]
-    return next((value.attributes[k] for k in dates if value.attributes.get(k)), "9999")
+    return value.start_date.isoformat() if value.start_date else "9999"
 
 
 def _combine(totals, plus, minus, columns):

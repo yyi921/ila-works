@@ -231,6 +231,25 @@ def assign_from_tracking(parent, dimension):
     return unmapped
 
 
+def reapply_tracking(dimension, option_ids):
+    """Re-mirror the source's tracking in ``dimension`` on every copied transaction with a line tracked to one of
+    ``option_ids``: run after values are linked to those options (e.g. a new event), so lines copied before the
+    link get their tags without waiting for the transaction to change in the source. Returns how many
+    transactions were looked at."""
+    option_ids = [pk for pk in option_ids if pk]
+    if not dimension.tracking_category_id or not option_ids:
+        return 0
+    count = 0
+    for parent_model, (_, line_model, fk) in PARENTS.items():
+        ids = (line_model.objects.filter(organisation=dimension.organisation, tracking__in=option_ids)
+               .values_list(f"{fk}_id", flat=True).distinct())
+        for parent in parent_model.objects.filter(pk__in=list(ids)):
+            with transaction.atomic():
+                assign_from_tracking(parent, dimension)
+            count += 1
+    return count
+
+
 def tracking_mismatches(organisation, dimension):
     """Lines where iLA's live tags in a tracking-linked ``dimension`` differ from the source's tracking: tagged in
     iLA but not in the source, tracked in the source but tagged differently (or Unassigned) in iLA, or split in

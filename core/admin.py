@@ -1,5 +1,5 @@
 from django.contrib import admin, messages
-from django.forms.models import BaseInlineFormSet
+from django.contrib.admin import helpers
 from django.urls import reverse
 from django.utils.html import format_html
 
@@ -136,8 +136,6 @@ for model in (
     models.BankTransactionLine,
     models.Journal,
     models.JournalLine,
-    models.DimensionValue,
-    models.Event,
     models.Tag,
 ):
     admin.site.register(model, list_display=("__str__", "organisation", "source_system", "source_id"),
@@ -201,38 +199,106 @@ class AuditLogAdmin(admin.ModelAdmin):
         return False
 
 
-class DimensionValueFormSet(BaseInlineFormSet):
-    def clean(self):
-        """No two values on the page may share a code, ignoring case (the database checks saved ones)."""
-        super().clean()
-        seen = {}
-        for form in self.forms:
-            if not hasattr(form, "cleaned_data") or form.cleaned_data.get("DELETE"):
-                continue
-            code = (form.cleaned_data.get("code") or "").strip()
-            if not code:
-                continue
-            if code.lower() in seen:
-                form.add_error("code", f"Code {code} is already used by {seen[code.lower()]} on this page.")
-            else:
-                seen[code.lower()] = form.cleaned_data.get("name") or code
+class DatesFilter(admin.SimpleListFilter):
+    title = "dates"
+    parameter_name = "dates"
+
+    def lookups(self, request, model_admin):
+        return (("set", "Has dates"), ("missing", "No dates"))
+
+    def queryset(self, request, queryset):
+        if self.value() == "set":
+            return queryset.filter(start_date__isnull=False)
+        if self.value() == "missing":
+            return queryset.filter(start_date__isnull=True)
+        return queryset
 
 
-class DimensionValueInline(admin.TabularInline):
-    model = models.DimensionValue
-    formset = DimensionValueFormSet
-    extra = 0
-    fields = ("code", "name", "description", "tracking_option", "attributes", "is_active")
+@admin.register(models.DimensionValue)
+class DimensionValueAdmin(admin.ModelAdmin):
+    """Each value of a dimension (e.g. each event) on its own, with its dates. The dates and bump days can be
+    changed straight from the list; Suggest dates fills in the ones that are missing, after you confirm."""
+
+    list_display = ("code", "name", "dimension", "start_date", "end_date", "bump_in_days", "bump_out_days",
+                    "season_shown", "in_xero", "is_active")
+    list_editable = ("start_date", "end_date", "bump_in_days", "bump_out_days", "is_active")
+    list_filter = ("organisation", "dimension", DatesFilter, "is_active")
+    search_fields = ("code", "name", "description")
+    list_select_related = ("dimension", "tracking_option")
+    list_per_page = 100  # 100 rows of editable columns stay well under Django's 1,000-field limit
+    ordering = ("dimension", "-start_date", "code")
+    fields = ("dimension", "code", "name", "description", "tracking_option", "start_date", "end_date",
+              "bump_in_days", "bump_out_days", "season", "attributes", "is_active")
     raw_id_fields = ("tracking_option",)
+    actions = ["suggest_dates"]
+
+    @admin.display(description="Season", boolean=True)
+    def season_shown(self, obj):
+        return obj.is_season
+
+    @admin.display(description="In Xero", boolean=True)
+    def in_xero(self, obj):
+        return obj.tracking_option_id is not None
+
+    def save_model(self, request, obj, form, change):
+        """A value belongs to its dimension's organisation. Linking it to a Xero option tags the lines already
+        copied with that option."""
+        obj.organisation = obj.dimension.organisation
+        super().save_model(request, obj, form, change)
+        if "tracking_option" in form.changed_data and obj.tracking_option_id:
+            from .tagging import reapply_tracking
+
+            count = reapply_tracking(obj.dimension, [obj.tracking_option_id])
+            if count:
+                messages.info(request, f"Tags refreshed on {count} transaction(s) tracked to {obj.code} in Xero.")
+
+    @admin.action(description="Suggest dates for the selected values that have none")
+    def suggest_dates(self, request, queryset):
+        from django.template.response import TemplateResponse
+
+        from .event_dates import suggest_all
+
+        values = queryset.select_related("dimension")
+        if request.POST.get("apply"):
+            chosen = set(request.POST.getlist("use"))
+            done = 0
+            for found in suggest_all(values):
+                if str(found.value.pk) in chosen:
+                    found.value.start_date, found.value.end_date = found.start, found.end
+                    found.value.save(update_fields=["start_date", "end_date", "updated_at"])
+                    done += 1
+            messages.success(request, f"Dates saved on {done} value(s).")
+            return None
+        suggestions = suggest_all(values)
+        if not suggestions:
+            messages.warning(request, "No dates could be suggested for the selected values (those that already "
+                                      "have dates are left alone). Type them in the list instead.")
+            return None
+        return TemplateResponse(request, "admin/core/dimensionvalue/suggest_dates.html", {
+            **self.admin_site.each_context(request),
+            "title": "Suggested dates",
+            "opts": self.model._meta,
+            "suggestions": suggestions,
+            "selected": request.POST.getlist(helpers.ACTION_CHECKBOX_NAME),
+            "select_across": request.POST.get("select_across", "0"),
+            "without": values.filter(start_date__isnull=True).count() - len(suggestions),
+        })
 
 
 @admin.register(models.Dimension)
 class DimensionAdmin(admin.ModelAdmin):
-    list_display = ("name", "code", "organisation", "replaces_source", "source_name", "is_active")
+    list_display = ("name", "code", "organisation", "values_link", "replaces_source", "source_name", "is_active")
     list_filter = ("organisation", "replaces_source", "is_active")
     search_fields = ("name", "code", "source_name")
+    readonly_fields = ("values_link",)
     fieldsets = (
-        (None, {"fields": ("organisation", "code", "name", "description", "is_active")}),
+        (None, {"fields": ("organisation", "code", "name", "description", "is_active", "values_link")}),
+        ("Dates", {
+            "fields": ("bump_in_days", "bump_out_days", "season_days"),
+            "description": "Defaults for values with dates, e.g. events: the set-up and pack-down days around each "
+                           "one, and how long a value can run before it counts as a season. A value can override "
+                           "its own bump days.",
+        }),
         ("Accounting system", {
             "fields": ("replaces_source", "source_name", "tracking_category"),
             "description": "Fill these in when this dimension replaces one the accounting system already has, so "
@@ -241,14 +307,12 @@ class DimensionAdmin(admin.ModelAdmin):
         ("Extra fields for values", {"fields": ("attribute_fields",), "classes": ("collapse",)}),
     )
     raw_id_fields = ("tracking_category",)
-    inlines = [DimensionValueInline]
 
-    def save_formset(self, request, form, formset, change):
-        """Inline values belong to the dimension's organisation."""
-        for value in formset.save(commit=False):
-            value.organisation = form.instance.organisation
-            value.save()
-        for value in formset.deleted_objects:
-            value.delete()
-        formset.save_m2m()
+    @admin.display(description="Values")
+    def values_link(self, obj):
+        if obj is None or obj.pk is None:
+            return "Save the dimension first, then add its values."
+        url = reverse("admin:core_dimensionvalue_changelist") + f"?dimension__id__exact={obj.pk}"
+        missing = obj.values.filter(start_date__isnull=True).count()
+        return format_html('<a href="{}">{} values</a> ({} without dates)', url, obj.values.count(), missing)
 
