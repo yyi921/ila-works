@@ -46,7 +46,7 @@ HOW_TO = {
     "find": "Search contacts and invoice or bill numbers and references, e.g. /find smith.",
     "dim": "See what you can tag by before tagging: Xero's tracking categories (Xero allows 2 active and 4 in all) "
            "and iLA's own dimensions, which have no limit and never change Xero. /dim event lists a category's "
-           "options and a dimension's values with their extra fields (e.g. venue, event date).",
+           "options and a dimension's values with their dates and extra fields (e.g. venue).",
     "tag": "Tag transactions to a dimension value, e.g. bills and invoices to events. Choose the types and period "
            "(both dates included), narrow with filters (--desc, --contact, --account, --amount, --xero, "
            "--attachment), then either --to one value or let iLA propose one per transaction from Xero tracking, "
@@ -60,8 +60,9 @@ HOW_TO = {
     "createtag": "Set up something to tag by from a CSV of its values. Pick a Xero tracking category to replace "
                  "(iLA then shows your names and details instead of codes like CCH1221; Xero isn't changed), an iLA "
                  "dimension to update, or a brand-new one. Download the starting file, fill in Code, Name, "
-                 "Description and any extra columns (Venue, Event date…), choose it with <<, check the preview and "
-                 "type approve.",
+                 "Description, Start date and End date (and Bump-in days, Bump-out days or Season if needed) and "
+                 "any extra columns (Venue…), choose it with <<, check the preview and type approve. Xero codes "
+                 "you add get their transactions already copied from Xero tagged straight away.",
     "orgs": "List the organisations you can use; * marks the current one.",
     "use": "Switch organisation, e.g. /use TECC. Commands then read that organisation.",
     "connect": "Connect or reconnect Xero. Also grants any new permissions iLA needs (it will say when).",

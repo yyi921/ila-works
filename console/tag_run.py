@@ -374,31 +374,10 @@ def _row(txn, lines, dimension, target, retag):
 
 # --- Proposing values -------------------------------------------------------------------------------------------
 
-def _date_keys(dimension):
-    dates = [f for f in dimension.attribute_fields if f.get("type") == Dimension.AttributeType.DATE]
-    if not dates:
-        return None, None
-    label = lambda f: (f.get("label") or f["key"]).lower()  # noqa: E731
-    start = next((f["key"] for f in dates if "start" in label(f)), dates[0]["key"])
-    end = next((f["key"] for f in dates if "end" in label(f) or "finish" in label(f)), start)
-    return start, end
-
-
 def _windows(values, dimension):
-    start_key, end_key = _date_keys(dimension)
-    windows = {}
-    if start_key is None:
-        return windows
-    for v in values:
-        first = v.attributes.get(start_key)
-        if not first:
-            continue
-        last = v.attributes.get(end_key) or first
-        try:
-            windows[v.pk] = (date.fromisoformat(first), max(date.fromisoformat(first), date.fromisoformat(last)))
-        except ValueError:
-            continue
-    return windows
+    """{value id: (start, end)} for the values with dates (their own start and end, no bump days: /tag pads them
+    with --window)."""
+    return {v.pk: (v.start_date, v.last_date) for v in values if v.start_date}
 
 
 def _word(text):

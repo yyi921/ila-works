@@ -4,7 +4,7 @@ A practical guide to the iLA console: what each command is for, how to type it, 
 full list of parameters with examples, see [Command reference](Command%20reference.md), or type `/help <command>` in
 the console.
 
-_Last updated: 8 November 2026 (`/review` rebuilt: the P&L by group with GL detail, notes and sign-off by account code, group or review request; ratios defined in Review settings)._
+_Last updated: 14 November 2026 (event dates: Start, End, bump days and Season on each event, in `/createTag` and on the admin Dimension values page, with suggested dates; new Xero codes tag what's already copied)._
 
 ---
 
@@ -404,8 +404,8 @@ Quarters and financial years follow the year end set in Xero.
 - **Purpose:** lists Xero tracking categories and iLA's own dimensions.
 - **Syntax:** `/dim [<name>] [--archived]`
 - **Use it:** before tagging. Xero allows 2 active tracking categories (4 in total); iLA dimensions have no limit
-  and never change Xero. `/dim event` shows a category's options, or a dimension's values with their extra fields
-  (e.g. venue, event date). `--archived` includes archived items.
+  and never change Xero. `/dim event` shows a category's options, or a dimension's values with their start and end
+  dates and extra fields (e.g. venue). `--archived` includes archived items.
 
 #### `/splittag` — split GL amounts across events
 - **Purpose:** share out the amounts on chosen GL accounts across events (or any dimension), e.g. September's
@@ -472,7 +472,10 @@ Quarters and financial years follow the year end set in Xero.
      | Name | Yes | The name people should see, e.g. Celtic Nights 2026. |
      | Description | No | Anything that helps people pick the right one. |
      | Active | No | `yes` or `no` (blank means yes). |
-     | Any other column | No | Becomes an extra field, e.g. Venue, Event date (`30/06/2026`), Capacity, Ticketed (`yes`/`no`). iLA works out the type from the values. |
+     | Start date, End date | No | The event's first and last day (`30/06/2026`). End can be empty for a one-day event. `Event date` or `Date` also works for the start. Used by `/tag` and to share out labour by event. |
+     | Bump-in days, Bump-out days | No | Set-up and pack-down days around this event, if not the usual (2 each, set on the dimension in admin). |
+     | Season | No | `yes` for something long-running, such as a sports season (e.g. 2627FIRE, 1 Oct – 28 Feb): it only takes a day when nothing else is on. Blank: anything longer than 7 days counts as a season. |
+     | Any other column | No | Becomes an extra field, e.g. Venue, Capacity, Ticketed (`yes`/`no`). iLA works out the type from the values. |
 
   4. **Review:** iLA shows each value as New, Updated or No change, and lists any problems (empty or duplicate
      codes, missing names, wrong types) and warnings (codes not in Xero, Xero codes missing from the file). Fix the
@@ -486,8 +489,22 @@ Quarters and financial years follow the year end set in Xero.
   - If a made code matches a Xero code, iLA links them and says so: check it's the right event.
   - Values already in iLA but not in the file stay as they are, and empty cells don't erase a saved detail.
   - Run `/createTag Event` again whenever you have new events: it updates what's there.
+  - **A new Xero code tags what's already in iLA.** Transactions iLA copied from Xero with a code it didn't know
+    yet (e.g. 2627FIRE) were Unassigned; approving `/createTag` with that code tags them straight away
+    ("Transactions re-tagged"). No `/tag` needed.
   - The admin **Dimensions** page shows the same set-up, including "Replaces a category in the accounting
-    system" and "Name in the accounting system" (e.g. Events Department), and lets you edit single values.
+    system", "Name in the accounting system" (e.g. Events Department) and the default bump-in and bump-out days and
+    season length. Its **values** link opens the **Dimension values** page.
+
+#### Event dates in admin (Core → Dimension values)
+- **Purpose:** see and change each event's dates, one row per event, without a values file.
+- **Use it:** filter by dimension and by **Dates: No dates**; type Start, End and bump days straight into the list
+  and **Save**. Open a value to change its name, Xero code, Season or extra fields. Adding a value here with a Xero
+  code tags the transactions already copied with that code, as `/createTag` does.
+- **Suggest dates:** tick the values (or select all), choose **Suggest dates for the selected values that have
+  none** and **Go**. iLA suggests dates from the code (`261017TOW` → 17 Oct 2026) and from dates written on the
+  event's sales invoices (`Venue Hire - Arena - 09.10.26`). Untick any that look wrong and **Save these dates**.
+  Values that already have dates are never changed; ones with nothing to go on are counted, to type in yourself.
 
 #### `/tag` — tag transactions to a dimension value
 - **Purpose:** say which event (or other dimension value) each invoice, bill, credit note, bank transaction or
@@ -691,6 +708,7 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 14 Nov 2026 | Event dates are each event's own Start, End, Bump-in days, Bump-out days and Season: `/createTag` columns, `/dim` columns, and the new admin **Dimension values** page (edit in the list, **Suggest dates** from codes and sales invoices). The Event page in admin no longer fails with Bad Request (400). Approving `/createTag` (or linking a Xero code in admin) tags transactions already copied with that code. |
 | 8 Nov 2026 | `/review` ratios are defined in Admin → Review → Review settings as formulas of account codes, ranges and groups (e.g. `5110-5330 / 4005 + 4810 + 4830`); the defaults give the same figures as before. |
 | 8 Nov 2026 | `/review` rebuilt: one P&L table by group (L0) with ratios, against last month, last year or budget, MTD or YTD; GL accounts per group (L1); notes, sign-off and reopen by account code, group or RR-01, with signed-off rows green and changes since sign-off amber. Materiality and iLA's readings removed for now. `/status` shows the review's progress. |
 | 7 Nov 2026 | Added `/review`: the month-end P&L review with the core checks C1–C8 (materiality per check in admin) and review requests (prompt → trial run → confirm), worked with `why`, `note`, `ok`, `later` and `act`. |

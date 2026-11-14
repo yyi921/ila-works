@@ -226,3 +226,6 @@ staticfiles/
 docs/Invoice example/
 docs/createINV/*.pdf
 docs/events.csv
+
+# Payroll source files contain personal data
+docs/labour costs/

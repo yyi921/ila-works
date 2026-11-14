@@ -12,7 +12,6 @@ from core.models import (
     DimensionValue,
     Document,
     DocumentLine,
-    Event,
     ImportFile,
     Organisation,
     SourceSystem,
@@ -57,14 +56,28 @@ def test_blank_source_id_allowed_for_ila_rows(org):
     assert Dimension.objects.for_organisation(org).filter(source_system=SourceSystem.ILA).count() == 2
 
 
-def test_event_date_constraints(org):
-    Event.objects.create(organisation=org, name="Gala", start_date=date(2026, 11, 7), end_date=date(2026, 11, 7),
-                         bump_in_date=date(2026, 11, 6), bump_out_date=date(2026, 11, 8))
+def test_value_dates_and_window(org):
+    dim = Dimension.objects.create(organisation=org, code="event", name="Event")
+    gala = DimensionValue.objects.create(organisation=org, dimension=dim, code="261107GAL", name="Gala",
+                                         start_date=date(2026, 11, 7))
+    assert gala.last_date == date(2026, 11, 7) and not gala.is_season
+    assert gala.window() == (date(2026, 11, 5), date(2026, 11, 7), date(2026, 11, 7), date(2026, 11, 9))
+    gala.bump_in_days, gala.bump_out_days = 0, 1
+    assert gala.window() == (date(2026, 11, 7), date(2026, 11, 7), date(2026, 11, 7), date(2026, 11, 8))
+    season = DimensionValue(organisation=org, dimension=dim, code="2627FIRE", name="Fire season",
+                            start_date=date(2026, 10, 1), end_date=date(2027, 2, 28))
+    assert season.is_season
+    season.season = False
+    assert not season.is_season
+    assert DimensionValue(organisation=org, dimension=dim, code="X", name="No dates").window() is None
+    with pytest.raises(ValidationError, match="before the start"):
+        DimensionValue(organisation=org, dimension=dim, code="BAD", name="Bad", start_date=date(2026, 11, 7),
+                       end_date=date(2026, 11, 6)).full_clean()
+    with pytest.raises(ValidationError, match="start as well"):
+        DimensionValue(organisation=org, dimension=dim, code="BAD", name="Bad", end_date=date(2026, 11, 6)).full_clean()
     with pytest.raises(IntegrityError), transaction.atomic():
-        Event.objects.create(organisation=org, name="Bad", start_date=date(2026, 11, 7), end_date=date(2026, 11, 6))
-    with pytest.raises(IntegrityError), transaction.atomic():
-        Event.objects.create(organisation=org, name="Bad bump", start_date=date(2026, 11, 7),
-                             end_date=date(2026, 11, 7), bump_in_date=date(2026, 11, 8))
+        DimensionValue.objects.create(organisation=org, dimension=dim, code="BAD", name="Bad",
+                                      start_date=date(2026, 11, 7), end_date=date(2026, 11, 6))
 
 
 def test_tag_sets_dimension_and_snapshots_line_hash(line, event_value):

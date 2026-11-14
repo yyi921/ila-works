@@ -9,7 +9,7 @@ are signed, debit positive.
 """
 
 import hashlib
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.conf import settings
@@ -357,6 +357,18 @@ class Dimension(TenantModel):
         help_text='Customer-defined fields for this dimension\'s values: a list of {"key", "label", "type", '
                   '"required"} with type one of text, number, date, boolean.',
     )
+    bump_in_days = models.PositiveSmallIntegerField(
+        "bump-in days", default=2,
+        help_text="Days before a value's start date that still count as its days (set-up), unless the value says "
+                  "otherwise.")
+    bump_out_days = models.PositiveSmallIntegerField(
+        "bump-out days", default=2,
+        help_text="Days after a value's end date that still count as its days (pack-down), unless the value says "
+                  "otherwise.")
+    season_days = models.PositiveSmallIntegerField(
+        "season after (days)", default=7,
+        help_text="A value running longer than this many days is a season (e.g. a sports season): it only takes a "
+                  "day when no other value is on.")
     is_active = models.BooleanField(default=True)
 
     class Meta(TenantModel.Meta):
@@ -411,21 +423,63 @@ class DimensionValue(TenantModel):
     )
     attributes = models.JSONField(default=dict, blank=True,
                                   help_text="Values for the fields defined in the dimension's attribute_fields.")
+    start_date = models.DateField("start", null=True, blank=True, help_text="First day, e.g. the event day.")
+    end_date = models.DateField("end", null=True, blank=True, help_text="Last day. Blank: the same as the start.")
+    bump_in_days = models.PositiveSmallIntegerField(
+        "bump-in days", null=True, blank=True,
+        help_text="Set-up days before the start. Blank: the dimension's default.")
+    bump_out_days = models.PositiveSmallIntegerField(
+        "bump-out days", null=True, blank=True,
+        help_text="Pack-down days after the end. Blank: the dimension's default.")
+    season = models.BooleanField(
+        null=True, blank=True,
+        help_text="A season only takes a day when nothing else is on. Blank: worked out from its length.")
     is_active = models.BooleanField(default=True)
 
     class Meta(TenantModel.Meta):
         constraints = TenantModel.Meta.constraints + [
             models.UniqueConstraint("dimension", Lower("code"), name="core_dimensionvalue_code_uniq",
-                                    violation_error_message="Another value in this dimension already uses this code.")
+                                    violation_error_message="Another value in this dimension already uses this code."),
+            models.CheckConstraint(
+                condition=Q(end_date__isnull=True) | Q(start_date__isnull=False, end_date__gte=F("start_date")),
+                name="core_dimensionvalue_end_after_start",
+                violation_error_message="The end can't be before the start, and needs a start."),
         ]
 
     def __str__(self):
         return f"{self.dimension}: {self.name}"
 
+    @property
+    def last_date(self):
+        """The last day, or None without dates."""
+        return self.end_date or self.start_date
+
+    @property
+    def is_season(self):
+        """Explicitly a season, or (when not set) longer than the dimension's season length."""
+        if self.season is not None:
+            return self.season
+        if self.start_date is None:
+            return False
+        return (self.last_date - self.start_date).days + 1 > self.dimension.season_days
+
+    def window(self):
+        """(first bump day, start, end, last bump day), or None without a start date."""
+        if self.start_date is None:
+            return None
+        before = self.dimension.bump_in_days if self.bump_in_days is None else self.bump_in_days
+        after = self.dimension.bump_out_days if self.bump_out_days is None else self.bump_out_days
+        return (self.start_date - timedelta(days=before), self.start_date, self.last_date,
+                self.last_date + timedelta(days=after))
+
     def clean(self):
-        """Check ``attributes`` against the dimension's field definitions: no unknown keys, required fields
-        present, and each value of the declared type."""
+        """Check the dates and ``attributes`` against the dimension's field definitions: no unknown keys, required
+        fields present, and each value of the declared type."""
         super().clean()
+        if self.end_date and not self.start_date:
+            raise ValidationError({"start_date": "Give the start as well as the end."})
+        if self.end_date and self.start_date and self.end_date < self.start_date:
+            raise ValidationError({"end_date": "The end can't be before the start."})
         if not isinstance(self.attributes, dict):
             raise ValidationError({"attributes": "Must be an object of field values."})
         specs = {spec["key"]: spec for spec in self.dimension.attribute_fields}
@@ -439,38 +493,6 @@ class DimensionValue(TenantModel):
                 errors.append(f"{spec.get('label', key)} must be a {spec.get('type', 'text')} value.")
         if errors:
             raise ValidationError({"attributes": errors})
-
-
-class Event(TenantModel):
-    """Reference data for the event dimension, typically from a customer calendar CSV
-    (``source_system="import"``, ``source_id`` = the customer's event ID)."""
-
-    dimension_value = models.OneToOneField(
-        DimensionValue, null=True, blank=True, on_delete=models.SET_NULL, related_name="event"
-    )
-    name = models.CharField(max_length=255)
-    venue = models.CharField(max_length=255, blank=True)
-    start_date = models.DateField()
-    end_date = models.DateField()
-    bump_in_date = models.DateField(null=True, blank=True)
-    bump_out_date = models.DateField(null=True, blank=True)
-
-    class Meta(TenantModel.Meta):
-        constraints = TenantModel.Meta.constraints + [
-            models.CheckConstraint(condition=Q(end_date__gte=F("start_date")), name="core_event_end_after_start"),
-            models.CheckConstraint(
-                condition=Q(bump_in_date__isnull=True) | Q(bump_in_date__lte=F("start_date")),
-                name="core_event_bump_in_before_start",
-            ),
-            models.CheckConstraint(
-                condition=Q(bump_out_date__isnull=True) | Q(bump_out_date__gte=F("end_date")),
-                name="core_event_bump_out_after_end",
-            ),
-        ]
-        indexes = [models.Index(fields=["organisation", "start_date"])]
-
-    def __str__(self):
-        return self.name
 
 
 _ONE_LINE = (

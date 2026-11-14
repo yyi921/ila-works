@@ -1083,13 +1083,17 @@ def _dim_detail(text, categories, dimensions, archived):
             result.add(Note(f"{hidden} archived option(s) hidden; add --archived to see them."))
     for d in dims:
         fields = [(f["key"], f.get("label") or f["key"]) for f in d.attribute_fields]
+        dated = d.values.filter(start_date__isnull=False).exists()
         table = result.add(Table([Column("Code"), Column("Value"), Column("Xero option")]
+                                 + ([Column("Start"), Column("End")] if dated else [])
                                  + [Column(label) for _, label in fields] + [Column("Status")],
                                  title=f"iLA dimension {d.name}" + (f" (from Xero {d.tracking_category.name})"
                                                                     if d.tracking_category_id else "")))
         for v in d.values.select_related("tracking_option").order_by("name"):
             if v.is_active or archived:
-                table.add(v.code, v.name, v.tracking_option.name if v.tracking_option_id else "",
+                dates = ([f"{v.start_date:%d/%m/%Y}" if v.start_date else "",
+                          f"{v.last_date:%d/%m/%Y}" if v.start_date else ""] if dated else [])
+                table.add(v.code, v.name, v.tracking_option.name if v.tracking_option_id else "", *dates,
                           *[_attr(v.attributes.get(key)) for key, _ in fields], "Active" if v.is_active else "Archived")
         if not table.rows:
             result.add(Note(f"{d.name} has no values yet."))
