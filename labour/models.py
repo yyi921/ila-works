@@ -63,44 +63,34 @@ class OnCost(TenantModel):
         return self.name
 
 
-class ComponentRule(TenantModel):
-    """Sends a kind of pay to its own GL account, e.g. Super to 6370. Lines no rule matches go to their cost
-    account's GL. The first matching rule (by order) wins."""
+class PayComponent(TenantModel):
+    """A pay component in the payroll system (Micropay's Pay Comp/Add Ded Code, e.g. Normal, SAT50, Super) and the
+    GL account its pay goes to. New ones are added here when a pay-run file has them, to be given a GL account."""
 
-    class MatchOn(models.TextChoices):
-        TRANSACTION_TYPE = "transaction_type", "Transaction type is"
-        COMPONENT = "component", "Pay component contains"
-
-    settings = models.ForeignKey(LabourSettings, on_delete=models.CASCADE, related_name="component_rules")
-    match_on = models.CharField(max_length=20, choices=MatchOn.choices)
-    text = models.CharField(max_length=100, help_text="e.g. Super, Sick Leave, or allowance.")
-    account = models.CharField(max_length=20, help_text="GL account code, e.g. 6370.")
-    order = models.PositiveSmallIntegerField(default=0)
+    code = models.CharField(max_length=50)
+    description = models.CharField(max_length=255, blank=True, help_text="e.g. Saturday Loading - 50%.")
+    transaction_type = models.CharField(max_length=100, blank=True, help_text="As the last file had it, e.g. Super.")
+    gl_account = models.CharField("GL account", max_length=20, blank=True, help_text="e.g. 6345.")
 
     class Meta(TenantModel.Meta):
-        ordering = ["order", "pk"]
-        verbose_name = "pay component rule"
+        constraints = TenantModel.Meta.constraints + [
+            models.UniqueConstraint(fields=["organisation", "code"], name="labour_paycomponent_code_uniq")]
+        ordering = ["code"]
+        verbose_name = "pay component"
 
     def __str__(self):
-        return f"{self.get_match_on_display()} {self.text} → {self.account}"
-
-    def matches(self, transaction_type, component):
-        text = self.text.strip().lower()
-        if self.match_on == self.MatchOn.TRANSACTION_TYPE:
-            return (transaction_type or "").strip().lower() == text
-        return text in (component or "").lower()
+        return f"{self.code} {self.description}".strip()
 
 
 class CostAccount(TenantModel):
-    """A payroll cost account (e.g. 700-3000 TECC - F&B Service): its Xero department, GL account, and whether its
-    cost can go to an event. New ones appear here on upload, to be filled in."""
+    """A payroll cost account (e.g. 700-3000 TECC - F&B Service): its Xero department and whether its cost can go
+    to an event. (The GL account comes from the pay component.) New ones appear here on upload, to be filled in."""
 
     code = models.CharField(max_length=50)
     name = models.CharField(max_length=255, blank=True)
     department = models.CharField(max_length=255, blank=True,
                                   help_text="The option in Xero's department tracking, e.g. Food and Beverage "
                                             "Services.")
-    gl_account = models.CharField("GL account", max_length=20, blank=True, help_text="e.g. 6345.")
     taggable = models.BooleanField("can go to an event", default=True,
                                    help_text="Untick for costs never shared out by event, e.g. Fixed Wages or Event "
                                              "Sales: they stay Unassigned.")
@@ -115,7 +105,7 @@ class CostAccount(TenantModel):
 
     @property
     def needs_mapping(self):
-        return not (self.department and self.gl_account)
+        return not self.department
 
     def clean(self):
         super().clean()
@@ -179,6 +169,7 @@ class PayLine(TenantModel):
     run = models.ForeignKey(PayRun, on_delete=models.CASCADE, related_name="lines")
     employee = models.ForeignKey(Employee, on_delete=models.PROTECT, related_name="lines")
     cost_account = models.ForeignKey(CostAccount, on_delete=models.PROTECT, related_name="lines")
+    pay_component = models.ForeignKey(PayComponent, on_delete=models.PROTECT, related_name="lines")
     transaction_type = models.CharField(max_length=100, blank=True, help_text="e.g. Hours By Rate, Super.")
     component_code = models.CharField(max_length=50, blank=True)
     component = models.CharField(max_length=255, blank=True, help_text="e.g. Saturday Loading - 50%.")

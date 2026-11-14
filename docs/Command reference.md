@@ -237,7 +237,7 @@ Examples:
 - `/labour << TECC-employee breakdown 01.11.xlsx`
 - `/labour --Oct 2026`
 
-New cost accounts in a file are added to Admin → Labour → Cost accounts, to be given a department, a GL account and whether they can go to an event. On-cost rates (payroll tax, workcover) are learned from the payroll journal in Xero the first time and can be changed in Admin → Labour → Labour settings.
+New cost accounts in a file are added to Admin → Labour → Cost accounts, to be given a department and whether they can go to an event. New pay components (Micropay's Pay Comp/Add Ded Code) are added to Admin → Labour → Pay components, to be given the GL account they go to. Both lists can be downloaded and uploaded as CSV. On-cost rates (payroll tax, workcover) are learned from the payroll journal in Xero the first time and can be changed in Admin → Labour → Labour settings.
 
 ### /reconcile
 

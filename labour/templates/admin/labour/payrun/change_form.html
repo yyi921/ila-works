@@ -5,7 +5,7 @@
 <div class="module">
   <h2>By cost account</h2>
   <table style="width:100%">
-    <thead><tr><th>Cost account</th><th>Department</th><th>Can go to an event</th><th>GL</th>
+    <thead><tr><th>Cost account</th><th>Department</th><th>Can go to an event</th>
       <th style="text-align:right">Employees</th><th style="text-align:right">Hours</th>
       <th style="text-align:right">Amount</th></tr></thead>
     <tbody>
@@ -13,16 +13,30 @@
       <tr><td>{{ account }}</td>
         <td>{{ account.department|default:"<em>not set</em>" }}</td>
         <td>{{ account.taggable|yesno:"Yes,No" }}</td>
-        <td>{{ account.gl_account|default:"<em>not set</em>" }}</td>
         <td style="text-align:right">{{ employees }}</td>
         <td style="text-align:right">{{ hours|floatformat:"2g" }}</td>
         <td style="text-align:right">{{ amount|floatformat:"2g" }}</td></tr>
     {% endfor %}
-    <tr><th colspan="6">Total</th><th style="text-align:right">{{ original.total|floatformat:"2g" }}</th></tr>
+    <tr><th colspan="5">Total</th><th style="text-align:right">{{ original.total|floatformat:"2g" }}</th></tr>
     </tbody>
   </table>
   <p><a href="{{ lines_url }}">See every line</a> · <a href="{{ cost_accounts_url }}">Cost accounts</a> ·
-    <a href="{{ settings_url }}">Labour settings</a></p>
+    <a href="{{ components_url }}">Pay components</a> · <a href="{{ settings_url }}">Labour settings</a></p>
+</div>
+
+<div class="module">
+  <h2>By pay component</h2>
+  <table style="width:100%">
+    <thead><tr><th>Pay component</th><th>GL</th><th style="text-align:right">Hours</th>
+      <th style="text-align:right">Amount</th></tr></thead>
+    <tbody>
+    {% for component, hours, amount in components %}
+      <tr><td>{{ component }}</td><td>{{ component.gl_account|default:"<em>not set</em>" }}</td>
+        <td style="text-align:right">{{ hours|floatformat:"2g" }}</td>
+        <td style="text-align:right">{{ amount|floatformat:"2g" }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
 </div>
 
 <div class="module">

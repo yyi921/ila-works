@@ -258,34 +258,39 @@ Quarters and financial years follow the year end set in Xero.
 - **Steps:**
   1. `/labour << TECC-employee breakdown 01.11.xlsx` (or Admin → Labour → Pay runs → **Upload pay-run file**).
   2. iLA shows the days worked, pay date, employees, lines and total, and checks the total against the file's
-     Summary sheet. Then the pay run **by cost account** (department, GL, whether it can go to an event, hours and
-     $), and either **by GL account** (not in Xero yet) or **against the payroll journal in Xero** (e.g. *Ville for
-     TECC Payroll Journal FNE: 18/10/2026*), GL by GL with the difference.
-  3. The first time, set up the **cost accounts** iLA hasn't seen (the link on the result, or Admin → Labour → Cost
-     accounts → *Department or GL missing*): the Xero department, the GL account, and whether its cost can go to an
-     event. TECC:
+     Summary sheet. Then the pay run **by cost account** (department, whether it can go to an event, hours and $),
+     **by pay component** (with its GL account), and either **by GL account** (not in Xero yet) or **against the
+     payroll journal in Xero** (e.g. *Ville for TECC Payroll Journal FNE: 18/10/2026*), GL by GL with the
+     difference.
+  3. The first time, set up what iLA hasn't seen (the link on the result):
+     - **Cost accounts** (Admin → Labour → Cost accounts → *No department*): the cost account decides the **Xero
+       department** and whether its cost **can go to an event**. TECC:
 
-     | Cost account | Department | GL | Can go to an event |
-     | --- | --- | --- | --- |
-     | 700-3000 F&B Service | Food and Beverage Services | 6345 | Yes |
-     | 700-5000 Culinary and Stewarding | Food and Beverage Services | 6345 | Yes |
-     | 700-2600 Cleaner | Overhead & Venue Costs | 6345 | Yes |
-     | 700-2100 Fixed Wages | Overhead & Venue Costs | 6345 | No |
-     | 700-2000 Event Sales | Event Hire & Service Recoveries | 6345 | No |
+       | Cost account | Department | Can go to an event |
+       | --- | --- | --- |
+       | 700-3000 F&B Service | Food and Beverage Services | Yes |
+       | 700-5000 Culinary and Stewarding | Food and Beverage Services | Yes |
+       | 700-2600 Cleaner | Overhead & Venue Costs | Yes |
+       | 700-2100 Fixed Wages | Overhead & Venue Costs | No |
+       | 700-2000 Event Sales | Event Hire & Service Recoveries | No |
 
-     Or do them all at once from a CSV: on the Cost accounts page, **Download as CSV** (columns Code, Name,
-     Department, GL account, Can go to an event), fill it in Excel, save as CSV and **Upload cost accounts (CSV)**.
-     Every row is checked first (the department must be one of Xero's, the GL account must be in the chart, and Can
-     go to an event is yes or no); if any row has a problem, nothing is saved and the problems are listed. An empty
-     cell keeps what's saved, and cost accounts not in the file stay as they are.
+     - **Pay components** (Admin → Labour → Pay components → *No GL account*): the pay component (Micropay's *Pay
+       Comp/Add Ded Code*, e.g. Normal, SAT50, Super) decides the **GL account**. iLA guesses super, sick leave,
+       annual and long service leave and allowances from your chart; set the rest. TECC: Super 6370, Sick 6355,
+       NAUS and TOOL 6312, everything else 6345.
+
+     Both lists can be done at once from a CSV: on the page, **Download as CSV**, fill it in Excel, save as CSV and
+     **Upload … (CSV)**. Cost accounts: Code, Name, Department, Can go to an event. Pay components: Code,
+     Description, GL account. Every row is checked first (the department must be one of Xero's, the GL account must
+     be in the chart, Can go to an event is yes or no); if any row has a problem, nothing is saved and the problems
+     are listed. An empty cell keeps what's saved, and rows not in the file stay as they are.
 
 - **Good to know:**
   - Only each employee's **code and name** are kept (and their employment type, e.g. Casual). Date of birth, super
     fund and the file's other personal details are never read.
   - Uploading the same pay run again **replaces** it; the same file again changes nothing.
   - **Labour settings** (Admin → Labour) are filled in from your chart the first time: the payroll clearing account
-    (2350), Xero's Departments tracking, the Event dimension, and rules that send Super to 6370, Sick Leave to 6355
-    and allowances to 6312 (other pay goes to its cost account's GL).
+    (2350), Xero's Departments tracking and the Event dimension.
   - **On-costs** (payroll tax 6335, workcover 6380) are a rate of the pay run's total. iLA learns each rate from the
     payroll journal in Xero the first time it finds one, and says so; change them in Labour settings.
   - Every line, with its days worked, is under Admin → Labour → Pay lines (filter by pay run or cost account).
@@ -754,6 +759,7 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 14 Nov 2026 | The GL account now comes from the **pay component** (Micropay's Pay Comp/Add Ded Code), set in Admin → Labour → Pay components (with CSV upload and download); cost accounts set the department and whether the cost can go to an event. The pay-run summary shows a *By pay component* table. |
 | 14 Nov 2026 | Cost accounts can be downloaded and uploaded as a CSV (Admin → Labour → Cost accounts), checked against Xero's departments and the chart before anything is saved. |
 | 14 Nov 2026 | Added `/labour` and Admin → Labour: upload a pay-run file (Micropay employee breakdown), checked against its Summary total and the payroll journal in Xero; cost accounts mapped to department, GL and whether they can go to an event; on-cost rates learned from Xero. |
 | 14 Nov 2026 | Event dates are each event's own Start, End, Bump-in days, Bump-out days and Season: `/createTag` columns, `/dim` columns, and the new admin **Dimension values** page (edit in the list, **Suggest dates** from codes and sales invoices). The Event page in admin no longer fails with Bad Request (400). Approving `/createTag` (or linking a Xero code in admin) tags transactions already copied with that code. |

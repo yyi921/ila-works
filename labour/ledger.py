@@ -13,7 +13,7 @@ from django.db.models import Count, Sum
 from core.models import Account, AuditLog, Dimension, Journal, TrackingCategory, TrackingOption
 
 from .micropay import read
-from .models import ComponentRule, CostAccount, Employee, LabourSettings, OnCost, PayLine, PayRun
+from .models import CostAccount, Employee, LabourSettings, OnCost, PayComponent, PayLine, PayRun
 
 ZERO = Decimal("0")
 CENT = Decimal("0.01")
@@ -52,15 +52,19 @@ def settings_for(org):
             code = _account(org, *words)
             if code:
                 OnCost.objects.create(organisation=org, settings=found, name=name, account=code, order=order)
-        for order, (match_on, text, words) in enumerate((
-                (ComponentRule.MatchOn.TRANSACTION_TYPE, "Super", ("superannuation",)),
-                (ComponentRule.MatchOn.TRANSACTION_TYPE, "Sick Leave", ("sick leave",)),
-                (ComponentRule.MatchOn.COMPONENT, "allowance", ("allowance",)))):
-            code = _account(org, *words)
-            if code:
-                ComponentRule.objects.create(organisation=org, settings=found, match_on=match_on, text=text,
-                                             account=code, order=order)
     return found
+
+
+def guess_gl(org, transaction_type, description):
+    """A first guess at a new pay component's GL account, from the chart: super, sick leave, annual leave, long
+    service leave and allowances. Anything else is left for a person to set."""
+    kind, text = (transaction_type or "").lower(), (description or "").lower()
+    for words, accounts in ((("super",), ("superannuation",)), (("sick", "personal"), ("sick leave",)),
+                            (("annual leave",), ("annual leave",)), (("long service",), ("long service leave",)),
+                            (("allowance",), ("allowance",))):
+        if any(w in kind or w in text for w in words):
+            return _account(org, *accounts)
+    return ""
 
 
 def department_options(org):
@@ -72,12 +76,9 @@ def department_options(org):
                                               is_active=True).order_by("name").values_list("name", flat=True))
 
 
-def gl_for(line, rules):
-    """The GL account a pay line posts to: the first matching pay component rule, else its cost account's GL."""
-    for rule in rules:
-        if rule.matches(line.transaction_type, line.component):
-            return rule.account
-    return line.cost_account.gl_account or NOT_MAPPED
+def gl_for(line):
+    """The GL account a pay line posts to: its pay component's."""
+    return line.pay_component.gl_account or NOT_MAPPED
 
 
 # --- Saving -----------------------------------------------------------------------------------------------------
@@ -88,6 +89,7 @@ class Upload:
     replaced: bool = False
     unchanged: bool = False
     new_cost_accounts: list = field(default_factory=list)
+    new_components: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     learned: list = field(default_factory=list)
 
@@ -136,9 +138,27 @@ def upload(org, user, file_name, data):
                 accounts[line.cost_account_code].name = line.cost_account_name
                 accounts[line.cost_account_code].save(update_fields=["name", "updated_at"])
 
+        components, new_components = {c.code: c for c in PayComponent.objects.filter(organisation=org)}, []
+        seen = set()
+        for line in parsed.lines:
+            code = line.component_code or "(none)"
+            found = components.get(code)
+            if found is None:
+                found = components[code] = PayComponent.objects.create(
+                    organisation=org, code=code, description=line.component, transaction_type=line.transaction_type,
+                    gl_account=guess_gl(org, line.transaction_type, line.component))
+                new_components.append(found)
+            elif code not in seen and (found.description, found.transaction_type) != (
+                    line.component or found.description, line.transaction_type):
+                found.description = line.component or found.description
+                found.transaction_type = line.transaction_type
+                found.save(update_fields=["description", "transaction_type", "updated_at"])
+            seen.add(code)
+
         PayLine.objects.bulk_create(PayLine(
             organisation=org, run=run, employee=employees[line.employee_code],
-            cost_account=accounts[line.cost_account_code], transaction_type=line.transaction_type,
+            cost_account=accounts[line.cost_account_code],
+            pay_component=components[line.component_code or "(none)"], transaction_type=line.transaction_type,
             component_code=line.component_code, component=line.component, date_from=line.date_from,
             date_to=line.date_to, hours=line.hours, amount=line.amount) for line in parsed.lines)
         AuditLog.objects.create(organisation=org, user=user, action=AuditLog.Action.COMMAND,
@@ -147,7 +167,8 @@ def upload(org, user, file_name, data):
                                 result={"period_end": run.period_end.isoformat(), "total": str(run.total),
                                         "lines": run.line_count, "replaced": bool(existing)})
 
-    result = Upload(run, replaced=bool(existing), new_cost_accounts=new, warnings=parsed.warnings)
+    result = Upload(run, replaced=bool(existing), new_cost_accounts=new, new_components=new_components,
+                    warnings=parsed.warnings)
     result.learned = match_xero(run, settings)
     return result
 
@@ -216,14 +237,21 @@ def by_cost_account(run):
     return [(accounts[r["cost_account"]], r["employees"], r["hours"] or ZERO, r["amount"] or ZERO) for r in rows]
 
 
+def by_component(run):
+    """[(PayComponent, hours, amount)] for the pay run."""
+    rows = (run.lines.values("pay_component").annotate(hours=Sum("hours"), amount=Sum("amount"))
+            .order_by("pay_component__code"))
+    components = {c.pk: c for c in PayComponent.objects.filter(pk__in=[r["pay_component"] for r in rows])}
+    return [(components[r["pay_component"]], r["hours"] or ZERO, r["amount"] or ZERO) for r in rows]
+
+
 def by_gl(run, settings=None):
     """{GL account: amount} for the pay run's lines, then each on-cost on its account (None when its rate isn't
     set yet)."""
     settings = settings or settings_for(run.organisation)
-    rules = list(settings.component_rules.all())
     totals = defaultdict(lambda: ZERO)
-    for line in run.lines.select_related("cost_account"):
-        totals[gl_for(line, rules)] += line.amount
+    for line in run.lines.select_related("pay_component"):
+        totals[gl_for(line)] += line.amount
     on_costs = [(cost, (run.total * cost.rate).quantize(CENT) if cost.rate is not None else None)
                 for cost in settings.on_costs.all()]
     return dict(totals), on_costs

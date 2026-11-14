@@ -38,7 +38,8 @@ HOW_TO = {
     "labour": "Bring a pay run into iLA: /labour << breakdown.xlsx reads the payroll file (TECC: the Micropay "
               "employee breakdown), keeping only employee code and name. It shows the pay run by cost account and "
               "compares it, GL by GL, with the payroll journal posted in Xero (FNE …). New cost accounts are set up "
-              "in admin (Labour → Cost accounts): department, GL account and whether they can go to an event. "
+              "in admin (Labour → Cost accounts: department and whether they can go to an event) and new pay components "
+              "in Labour → Pay components (the GL account each goes to). "
               "/labour lists the pay runs; /labour --Oct 2026 those with days in October.",
     "review": "Month-end P&L review: /review (last full month) shows one table of the P&L by group (Revenue, Cost of "
               "sales, Gross profit, Labour, Other operating costs, EBITDA, Net profit) with GP, COGS, labour, EBITDA "
