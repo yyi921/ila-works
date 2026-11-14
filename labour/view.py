@@ -148,7 +148,7 @@ def labour_view(model_admin, request):
     elif tab == "day":
         context.update(_day_tab(m, choices, with_on_costs, start, end))
     elif tab == "event":
-        context.update(_event_tab(m))
+        context.update(_event_tab(m, request.GET.get("event")))
     else:
         context.update(_journal_tab(context["pay_runs"], end, context["total"] if with_on_costs else None))
     return TemplateResponse(request, "admin/labour/labour_view.html", context)
@@ -223,19 +223,47 @@ def _day_tab(m, choices, with_on_costs, start, end):
             "form": ChangeForm(choices=choices, initial={"date_from": start, "date_to": start})}
 
 
-def _event_tab(m):
+def _event_tab(m, open_key=None):
     totals = allocation.by_event(m)
     events = sorted((k for k in totals if k), key=lambda k: (m.values[k].start_date or date.max, m.values[k].code))
     rows = []
     for key in events + ([None] if None in totals else []):
         r = totals[key]
-        rows.append({"value": m.values.get(key), "employees": len(r["employees"]), "hours": r["hours"].quantize(CENT),
+        rows.append({"value": m.values.get(key), "key": key or "none", "employees": len(r["employees"]), "hours": r["hours"].quantize(CENT),
                      "wages": money(r["wages"]), "super": money(r["super"]), "on_costs": money(r["on_costs"]),
                      "total": money(r["total"]), "not_taggable": money(r["not_taggable"]),
                      "no_event": money(r["no_event"])})
     sums = {k: money(sum((r[k] for r in totals.values()), Decimal("0"))) for k in ("wages", "super", "on_costs",
                                                                                     "total")}
-    return {"event_rows": rows, "event_sums": sums}
+    detail = None
+    if open_key == "none" or (open_key and open_key.isdigit() and int(open_key) in totals):
+        detail = _event_detail(m, None if open_key == "none" else int(open_key), totals)
+    return {"event_rows": rows, "event_sums": sums, "event_detail": detail}
+
+
+def _event_detail(m, value_id, totals):
+    """The employees behind one row of By event: each one's days, with subtotals that add up to the row."""
+    days = allocation.event_days(m, value_id)
+    employees = {e.pk: e for e in Employee.objects.filter(pk__in={d["employee_id"] for d in days})}
+    groups = {}
+    for d in sorted(days, key=lambda d: (employees[d["employee_id"]].name.lower(), d["day"], d["cost_account"].code)):
+        group = groups.setdefault(d["employee_id"], {"employee": employees[d["employee_id"]], "days": [],
+                                                     "sum": dict.fromkeys(("hours", "wages", "super", "on_costs",
+                                                                           "total"), Decimal("0"))})
+        for k in group["sum"]:
+            group["sum"][k] += d[k]
+        group["days"].append({
+            "day": d["day"], "cost_account": d["cost_account"], "components": ", ".join(sorted(d["components"])),
+            "hours": d["hours"].quantize(CENT), "wages": money(d["wages"]), "super": money(d["super"]),
+            "on_costs": money(d["on_costs"]), "total": money(d["total"]), "reason": "; ".join(sorted(d["reasons"])),
+            "share": "" if d["shares"] == {Decimal("1")} else ", ".join(
+                f"{s * 100:.0f}%" for s in sorted(d["shares"], reverse=True))})
+    for group in groups.values():
+        group["sum"] = {k: (v.quantize(CENT) if k == "hours" else money(v)) for k, v in group["sum"].items()}
+    r = totals[value_id]
+    return {"value": m.values.get(value_id), "groups": list(groups.values()),
+            "sums": {k: (r[k].quantize(CENT) if k == "hours" else money(r[k]))
+                     for k in ("hours", "wages", "super", "on_costs", "total")}}
 
 
 def _journal_tab(runs, month_end, view_total):
