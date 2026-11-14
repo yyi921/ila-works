@@ -35,6 +35,11 @@ HOW_TO = {
               "their PDFs when read; else estimates from earlier months), with the evidence. Accept, adjust or reject "
               "each with a reason (accept 1-5, adjust 3 1,200 <reason>, reject 4 <reason>, why 3), then build the "
               "journal file to stamp and import. read reads the bill PDFs first.",
+    "labour": "Bring a pay run into iLA: /labour << breakdown.xlsx reads the payroll file (TECC: the Micropay "
+              "employee breakdown), keeping only employee code and name. It shows the pay run by cost account and "
+              "compares it, GL by GL, with the payroll journal posted in Xero (FNE …). New cost accounts are set up "
+              "in admin (Labour → Cost accounts): department, GL account and whether they can go to an event. "
+              "/labour lists the pay runs; /labour --Oct 2026 those with days in October.",
     "review": "Month-end P&L review: /review (last full month) shows one table of the P&L by group (Revenue, Cost of "
               "sales, Gross profit, Labour, Other operating costs, EBITDA, Net profit) with GP, COGS, labour, EBITDA "
               "and net profit %, then your review requests. Switch with vs lm|ly|budget, mtd, ytd; L1 rev (or "

@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "console",
     "accounting",
     "review",
+    "labour",
 ]
 
 MIDDLEWARE = [

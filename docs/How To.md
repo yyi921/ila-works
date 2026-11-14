@@ -4,7 +4,7 @@ A practical guide to the iLA console: what each command is for, how to type it, 
 full list of parameters with examples, see [Command reference](Command%20reference.md), or type `/help <command>` in
 the console.
 
-_Last updated: 14 November 2026 (event dates: Start, End, bump days and Season on each event, in `/createTag` and on the admin Dimension values page, with suggested dates; new Xero codes tag what's already copied)._
+_Last updated: 14 November 2026 (`/labour`: pay runs from the Micropay file into iLA's labour ledger, checked against Xero; event dates on each event, with suggested dates)._
 
 ---
 
@@ -92,6 +92,8 @@ Quarters and financial years follow the year end set in Xero.
 | Check how many Xero items are still unreconciled today | `/reconcile --bank` |
 | Review last month's P&L by group against last month, last year or budget | `/review`, then `vs budget`, `L1 rev`, `note 4061 <text>`, `signoff rev` |
 | Ask iLA to look at something every month, in your own words | Admin → Review → Review requests: write it, *Trial run*, *Confirm & save* |
+| Bring a fortnight's pay run into iLA and check it against Xero | `/labour << TECC-employee breakdown 01.11.xlsx` |
+| See which pay runs cover October | `/labour --Oct 2026` |
 | Review the month's accruals and build the journal file | `/accrue --Sep 2026`, then `accept bills`, `why 8`, `build` |
 | Let iLA read the PDFs of bills that came after month end | `/accrue --read --Sep 2026`, then `/accrue --refresh` |
 | Spot unusual or missing supplier bills | `/compare --bill` |
@@ -246,6 +248,44 @@ Quarters and financial years follow the year end set in Xero.
 - **`/status`** shows where the last full month's review stands: groups and review requests signed off, anything
   changed since sign-off, and the number of notes.
 - **Admin → Review → Review findings** lists every note and sign-off by month, with its history.
+
+### Labour
+
+#### `/labour` — bring in a pay run
+- **Purpose:** read the payroll file for one pay run into iLA's labour ledger, the base for reviewing labour,
+  accruing it and sharing it out by event. TECC: the Micropay **employee breakdown** for each fortnight.
+- **Syntax:** `/labour [<< breakdown.xlsx] [--<period>]`
+- **Steps:**
+  1. `/labour << TECC-employee breakdown 01.11.xlsx` (or Admin → Labour → Pay runs → **Upload pay-run file**).
+  2. iLA shows the days worked, pay date, employees, lines and total, and checks the total against the file's
+     Summary sheet. Then the pay run **by cost account** (department, GL, whether it can go to an event, hours and
+     $), and either **by GL account** (not in Xero yet) or **against the payroll journal in Xero** (e.g. *Ville for
+     TECC Payroll Journal FNE: 18/10/2026*), GL by GL with the difference.
+  3. The first time, set up the **cost accounts** iLA hasn't seen (the link on the result, or Admin → Labour → Cost
+     accounts → *Department or GL missing*): the Xero department, the GL account, and whether its cost can go to an
+     event. TECC:
+
+     | Cost account | Department | GL | Can go to an event |
+     | --- | --- | --- | --- |
+     | 700-3000 F&B Service | Food and Beverage Services | 6345 | Yes |
+     | 700-5000 Culinary and Stewarding | Food and Beverage Services | 6345 | Yes |
+     | 700-2600 Cleaner | Overhead & Venue Costs | 6345 | Yes |
+     | 700-2100 Fixed Wages | Overhead & Venue Costs | 6345 | No |
+     | 700-2000 Event Sales | Event Hire & Service Recoveries | 6345 | No |
+
+- **Good to know:**
+  - Only each employee's **code and name** are kept (and their employment type, e.g. Casual). Date of birth, super
+    fund and the file's other personal details are never read.
+  - Uploading the same pay run again **replaces** it; the same file again changes nothing.
+  - **Labour settings** (Admin → Labour) are filled in from your chart the first time: the payroll clearing account
+    (2350), Xero's Departments tracking, the Event dimension, and rules that send Super to 6370, Sick Leave to 6355
+    and allowances to 6312 (other pay goes to its cost account's GL).
+  - **On-costs** (payroll tax 6335, workcover 6380) are a rate of the pay run's total. iLA learns each rate from the
+    payroll journal in Xero the first time it finds one, and says so; change them in Labour settings.
+  - Every line, with its days worked, is under Admin → Labour → Pay lines (filter by pay run or cost account).
+  - `/labour` lists the latest pay runs, whether each is in Xero yet and the difference; `/labour --Oct 2026` those
+    with days in October.
+  - Coming next: the Labour view (by employee, day and event), the pay-run journal, and labour by event.
 
 ### Month-end accruals
 
@@ -708,6 +748,7 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 14 Nov 2026 | Added `/labour` and Admin → Labour: upload a pay-run file (Micropay employee breakdown), checked against its Summary total and the payroll journal in Xero; cost accounts mapped to department, GL and whether they can go to an event; on-cost rates learned from Xero. |
 | 14 Nov 2026 | Event dates are each event's own Start, End, Bump-in days, Bump-out days and Season: `/createTag` columns, `/dim` columns, and the new admin **Dimension values** page (edit in the list, **Suggest dates** from codes and sales invoices). The Event page in admin no longer fails with Bad Request (400). Approving `/createTag` (or linking a Xero code in admin) tags transactions already copied with that code. |
 | 8 Nov 2026 | `/review` ratios are defined in Admin → Review → Review settings as formulas of account codes, ranges and groups (e.g. `5110-5330 / 4005 + 4810 + 4830`); the defaults give the same figures as before. |
 | 8 Nov 2026 | `/review` rebuilt: one P&L table by group (L0) with ratios, against last month, last year or budget, MTD or YTD; GL accounts per group (L1); notes, sign-off and reopen by account code, group or RR-01, with signed-off rows green and changes since sign-off amber. Materiality and iLA's readings removed for now. `/status` shows the review's progress. |

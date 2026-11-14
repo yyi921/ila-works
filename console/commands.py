@@ -926,6 +926,22 @@ def review(ctx, cmd):
     return start(ctx, cmd)
 
 
+@command(
+    "labour", takes_input=True,
+    summary="Upload a pay-run file into iLA's labour ledger, or list the pay runs; each is checked against its "
+            "Summary total and the payroll journal in Xero.",
+    usage="/labour [<< breakdown.xlsx] [--<period>]",
+    params=[("<< breakdown.xlsx", "The payroll file for one pay run (TECC: the Micropay employee breakdown). Only "
+                                  "employee code and name are kept; the same pay run again replaces it."),
+            ("--<period>", "List the pay runs with days in the period, e.g. Oct 2026.")],
+    examples=["/labour", "/labour << TECC-employee breakdown 01.11.xlsx", "/labour --Oct 2026"],
+)
+def labour(ctx, cmd):
+    from labour.console import run
+
+    return run(ctx, cmd)
+
+
 # --- Lookups ---------------------------------------------------------------------------------------------------
 
 
