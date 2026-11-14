@@ -172,7 +172,7 @@
       <tr>{% if r.value %}<td>{{ r.value.code }} · {{ r.value.name }}</td>
           <td>{% if r.value.start_date %}{{ r.value.start_date|date:"d/m/Y" }}{% if r.value.end_date %}–{{ r.value.end_date|date:"d/m/Y" }}{% endif %}{% endif %}</td>
         {% else %}<td>Unassigned</td><td class="lv-muted">not taggable {{ r.not_taggable|floatformat:"2g" }} · no event {{ r.no_event|floatformat:"2g" }}</td>{% endif %}
-        <td class="n">{{ r.employees }}</td><td class="n">{{ r.hours|floatformat:"2g" }}</td>
+        <td class="n"><a href="?organisation={{ org.pk }}&month={{ month }}&tab=event&on_costs={{ query.on_costs }}&event={{ r.key }}#event-detail" title="See the employees and their days">{{ r.employees }}</a></td><td class="n">{{ r.hours|floatformat:"2g" }}</td>
         <td class="n">{{ r.wages|floatformat:"2g" }}</td><td class="n">{{ r.super|floatformat:"2g" }}</td>
         <td class="n">{{ r.on_costs|floatformat:"2g" }}</td><td class="n">{{ r.total|floatformat:"2g" }}</td></tr>
     {% empty %}
@@ -185,7 +185,35 @@
     {% endif %}
     </tbody>
   </table></div>
-  <p class="lv-muted">Employees and hours count a person once per event; split days share hours by the split.</p>
+  <p class="lv-muted">Employees and hours count a person once per event; split days share hours by the split. Click the
+    number of employees to see who worked and on which days.</p>
+  {% if event_detail %}
+  <div class="lv-detail" id="event-detail">
+    <h2>{% if event_detail.value %}{{ event_detail.value.code }} · {{ event_detail.value.name }}{% else %}Unassigned{% endif %}: employees and days</h2>
+    <div class="lv-wrap"><table class="lv">
+      <thead><tr><th>Employee / day</th><th>Cost account</th><th>Pay components</th><th class="n">Hours</th><th class="n">Wages</th>
+        <th class="n">Super</th><th class="n">On-costs</th><th class="n">Total</th><th>Share</th><th>Why</th></tr></thead>
+      <tbody>
+      {% for g in event_detail.groups %}
+        <tr class="open"><th colspan="3">{{ g.employee.name }} ({{ g.employee.code }}) · {{ g.days|length }} day{{ g.days|length|pluralize }}</th>
+          <th class="n">{{ g.sum.hours|floatformat:"2g" }}</th><th class="n">{{ g.sum.wages|floatformat:"2g" }}</th><th class="n">{{ g.sum.super|floatformat:"2g" }}</th>
+          <th class="n">{{ g.sum.on_costs|floatformat:"2g" }}</th><th class="n">{{ g.sum.total|floatformat:"2g" }}</th><th></th><th></th></tr>
+        {% for d in g.days %}
+        <tr><td>&nbsp;&nbsp;{{ d.day|date:"D d/m" }}</td><td>{{ d.cost_account }}</td><td>{{ d.components }}</td>
+          <td class="n">{{ d.hours|floatformat:"2g" }}</td><td class="n">{{ d.wages|floatformat:"2g" }}</td><td class="n">{{ d.super|floatformat:"2g" }}</td>
+          <td class="n">{{ d.on_costs|floatformat:"2g" }}</td><td class="n">{{ d.total|floatformat:"2g" }}</td><td>{{ d.share }}</td><td class="lv-muted">{{ d.reason }}</td></tr>
+        {% endfor %}
+      {% endfor %}
+      <tr class="total"><th colspan="3">Total ({{ event_detail.groups|length }} employees)</th>
+        <td class="n">{{ event_detail.sums.hours|floatformat:"2g" }}</td><td class="n">{{ event_detail.sums.wages|floatformat:"2g" }}</td>
+        <td class="n">{{ event_detail.sums.super|floatformat:"2g" }}</td><td class="n">{{ event_detail.sums.on_costs|floatformat:"2g" }}</td>
+        <td class="n">{{ event_detail.sums.total|floatformat:"2g" }}</td><td></td><td></td></tr>
+      </tbody>
+    </table></div>
+    <p class="lv-muted">Share below 100% means the day was split between events. Each employee's line adds up to their days;
+      the total is the same as the event's row above (cents may differ on employee lines from rounding).</p>
+  </div>
+  {% endif %}
 
 {% else %}
   {% if view_total is not None %}<p>{{ month_label }} journals: <strong>{{ month_journal_total|floatformat:"2g" }}</strong>

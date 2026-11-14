@@ -140,3 +140,20 @@ def test_labour_view_tabs_and_changes(client, labour):
     client.post("/admin/labour/labourview/", {"organisation": org[0].pk, "month": "2026-10", "remove": change.pk})
     assert not LabourOverride.objects.exists()
     assert "Labour view" in client.get("/admin/").content.decode()
+
+
+def test_event_drill_down_ties_to_the_row(client, labour):
+    org, events = labour
+    m = oct_(org)
+    rows = allocation.event_days(m, events["261013EXP"].pk)  # Ann's 11 Oct, half to Expo (bump day split)
+    assert [(r["day"], r["wages"], r["super"], r["shares"]) for r in rows] == [
+        (date(2026, 10, 11), D("150"), D("18"), {D("0.5")})]
+    unassigned = allocation.event_days(m, None)
+    assert sum(r["total"] for r in unassigned) == allocation.by_event(m)[None]["total"]
+
+    client.force_login(get_user_model().objects.create_superuser("boss", password="pw"))
+    base = f"/admin/labour/labourview/?organisation={org[0].pk}&month=2026-10&tab=event"
+    page = client.get(f"{base}&event={events['261013EXP'].pk}").content.decode()
+    assert "261013EXP · Expo: employees and days" in page and "Ann Lee (111)" in page and "50%" in page
+    page = client.get(f"{base}&event=none").content.decode()
+    assert "Unassigned: employees and days" in page and "Bo Chen (222)" in page

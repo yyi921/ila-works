@@ -275,3 +275,26 @@ def employee_days(m, employee_id, with_on_costs=True):
             row["shares"][value] += cost * share
         row["reasons"].add(p.reason)
     return [rows[k] for k in sorted(rows, key=lambda k: (k[0], rows[k]["cost_account"].code))]
+
+
+def event_days(m, value_id):
+    """[row] for one event (``value_id``; None for Unassigned): one row per employee, day and cost account, with the
+    share of hours, wages, super, on-costs and total that went to it. The rows add up to by_event's row."""
+    rows = {}
+    for p in m.pieces:
+        share = sum((s for v, s in p.shares if v == value_id), ZERO)
+        if not share:
+            continue
+        key = (p.employee_id, p.day, p.cost_account.pk)
+        row = rows.setdefault(key, {"employee_id": p.employee_id, "day": p.day, "cost_account": p.cost_account,
+                                    "components": set(), "hours": ZERO, "wages": ZERO, "super": ZERO,
+                                    "on_costs": ZERO, "total": ZERO, "shares": set(), "reasons": set()})
+        on_cost = m.on_cost(p.amount)
+        row["components"].add(p.component.code)
+        row["hours"] += p.hours * share
+        row["super" if p.is_super else "wages"] += p.amount * share
+        row["on_costs"] += on_cost * share
+        row["total"] += (p.amount + on_cost) * share
+        row["shares"].add(share)
+        row["reasons"].add(p.reason)
+    return list(rows.values())
