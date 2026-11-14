@@ -97,8 +97,8 @@ def rules_file(rows, name="rules.csv"):
     return SimpleUploadedFile(name, out.getvalue().encode("utf-8-sig"), content_type="text/csv")
 
 
-LABOUR = [["labour", "469-477", "journals", "", "", "", "", "Event", "ABBA", "100", ""],
-          ["labour", "469-477", "journals", "", "", "", "", "Event", "ADF", "300", ""]]
+LABOUR = [["wages", "469-477", "journals", "", "", "", "", "Event", "ABBA", "100", ""],
+          ["wages", "469-477", "journals", "", "", "", "", "Event", "ADF", "300", ""]]
 HYBRID = [["advice", "412", "bills", "", "", "", "", "Event", "ABBA", "100", ""],
           ["advice", "412", "bills", "", "", "", "", "Event", "ADF", "", "30"],
           ["advice", "412", "bills", "", "", "", "", "Event", "CN", "", "70"]]
@@ -107,7 +107,7 @@ HYBRID = [["advice", "412", "bills", "", "", "", "", "Event", "ABBA", "100", ""]
 def test_amounts_are_pro_rated_across_a_group_of_accounts(client, org, event):
     result = say(client, "/splittag --Sep 2026 <<", [rules_file(LABOUR + HYBRID)])
     t = tables(result)
-    labour = t["labour: 469-477 · journals · 2 line(s) · September 2026"]
+    labour = t["wages: 469-477 · journals · 2 line(s) · September 2026"]
     assert labour == [["ABBA", "100.00", "16.7%", "100.00"], ["ADF ADF Seminar", "300.00", "50.0%", "300.00"],
                       ["Unassigned", "What's left", "33.3%", "200.00"], ["Total", "", "100.0%", "600.00"]]
     advice = t["advice: 412 · bills · 1 line(s) · September 2026"]
@@ -123,7 +123,7 @@ def test_amounts_are_pro_rated_across_a_group_of_accounts(client, org, event):
     assert sorted((t.dimension_value.code, t.allocation) for t in wages.tags.all()) == [
         ("ABBA", D("0.166675")), ("ADF", D("0.5"))]  # $66.67 and $200.00 of the $400 line, to the cent
     assert unbalanced_lines(org[0], event) == []
-    assert {r.name: r.last_run for r in SplitRule.objects.all()} == {"labour": "September 2026",
+    assert {r.name: r.last_run for r in SplitRule.objects.all()} == {"wages": "September 2026",
                                                                      "advice": "September 2026"}
 
     pl = next(b for b in say(client, "/pl --event --Sep 2026")["blocks"] if b["type"] == "table")
@@ -138,10 +138,10 @@ def test_saved_rule_runs_again_with_the_scope_changed(client, org, event):
     say(client, "/splittag --Sep 2026 <<", [rules_file(LABOUR)])
     say(client, "approve")
     listing = tables(say(client, "/splittag"))["Saved rules"]
-    assert listing == [["labour", "Event", "469-477", "journals", "ABBA $100, ADF $300", "September 2026"]]
+    assert listing == [["wages", "Event", "469-477", "journals", "ABBA $100, ADF $300", "September 2026"]]
 
-    result = say(client, "/splittag --gl 477 --sep-2026 --labour --all")  # wages journal line + the casual bill
-    table = tables(result)["labour: 477 · all types · 2 line(s) · September 2026"]
+    result = say(client, "/splittag --gl 477 --sep-2026 --wages --all")  # wages journal line + the casual bill
+    table = tables(result)["wages: 477 · all types · 2 line(s) · September 2026"]
     assert table[-1] == ["Total", "", "100.0%", "650.00"]
     assert "already have a split" in notes(result)
     say(client, "approve")
@@ -155,7 +155,7 @@ def test_saved_rule_runs_again_with_the_scope_changed(client, org, event):
 def test_mistakes_are_reported_and_nothing_saved(client, org, event):
     overlap = LABOUR + [["wagesonly", "477", "all", "", "", "", "", "Event", "CN", "", "50"]]
     result = say(client, "/splittag --Sep 2026 <<", [rules_file(overlap)])
-    assert "is also in rule labour's scope" in notes(result) and "Nothing was saved" in notes(result)
+    assert "is also in rule wages's scope" in notes(result) and "Nothing was saved" in notes(result)
     assert not SplitRun.objects.filter(status="open").exists()
 
     too_much = [["big", "469-477", "journals", "", "", "", "", "Event", "ABBA", "700", ""]]
@@ -185,7 +185,7 @@ def test_first_time_gets_the_template_and_the_next_command(client, org, event):
     say(client, "/splittag --Sep 2026 <<", [rules_file(LABOUR)])
     say(client, "approve")
     result = say(client, "/splittag --Oct 2026")
-    assert "Saved rules" in tables(result) and "/splittag --labour --October 2026" in notes(result)
+    assert "Saved rules" in tables(result) and "/splittag --wages --October 2026" in notes(result)
 
 
 def test_fixed_amounts_are_exact_to_the_cent_on_awkward_totals(client, org, event, source):
@@ -214,7 +214,7 @@ def test_fixed_amounts_are_exact_to_the_cent_on_awkward_totals(client, org, even
 def test_pl_warns_about_a_split_waiting_for_approval(client, org, event):
     say(client, "/splittag --Sep 2026 <<", [rules_file(LABOUR)])
     result = say(client, "/pl --event --2026-09")
-    assert "Your /splittag preview (labour) isn't approved yet" in notes(result)
+    assert "Your /splittag preview (wages) isn't approved yet" in notes(result)
     assert say(client, "approve")["title"] == "Split saved: 2 line(s) tagged"  # still waiting after the report
     result = say(client, "/pl --event --2026-09")
     assert "isn't approved yet" not in notes(result)
@@ -236,3 +236,54 @@ def test_pl_by_event_downloads_as_excel(client, org, event):
     assert header[2:4] == ["ABBA", "ADF ADF Seminar"] and "Difference" in header
     wages = next(r for r in rows if r and r[1] == "Wages")
     assert wages[2] == pytest.approx(66.67)  # a number Excel can add up, not text
+
+
+# --- /splittag --labour: shares from the month's pay runs -------------------------------------------------------
+
+def test_labour_split_shows_the_variance_then_tags_by_event_shares(client, org, event):
+    from datetime import date as day, datetime
+
+    from labour import ledger
+    from labour.models import CostAccount, PayComponent
+    from labour.tests.test_labour import row, workbook
+    from review.models import ReviewSettings
+
+    ReviewSettings.objects.create(organisation=org[0], labour_accounts="477")
+    abba = DimensionValue.objects.get(code="ABBA")
+    abba.start_date = day(2026, 9, 10)
+    abba.bump_in_days = abba.bump_out_days = 0
+    abba.save()
+    end = datetime(2026, 9, 30)
+    rows = [row(111, "Ann Lee", "700-3000", "TECC - F&B Service", "Normal Pay", "Hours By Rate",
+                datetime(2026, 9, 10), datetime(2026, 9, 10), 10, 300.00, period_end=end),
+            row(222, "Bo Chen", "700-2100", "TECC - Fixed Wages", "Normal Pay", "Auto Pay",
+                datetime(2026, 9, 11), datetime(2026, 9, 11), 8, 100.00, period_end=end)]
+    ledger.upload(org[0], org[1], "sep.xlsx", workbook(rows=rows, summary_total=D("400.00")))
+    CostAccount.objects.filter(code="700-2100").update(taggable=False)
+    PayComponent.objects.update(gl_account="477")
+
+    result = say(client, "/splittag --labour --Sep 2026")
+    t = tables(result)
+    variance = t["Labour: pay runs against Xero (477)"]
+    assert variance[0][:2] == ["Labour journal, September 2026 days", "400.00"]
+    assert variance[1][:2] == ["Actual labour in Xero, September 2026", "650.00"]  # wages journal 400 + bill 250
+    assert variance[2][:2] == ["Variance", "(250.00)"]
+    shares = t["labour: 477 · all types · 2 line(s) · September 2026"]
+    assert shares == [["ABBA", "300.00 of labour", "75.0%", "487.50"], ["Unassigned", "What's left", "25.0%", "162.50"],
+                      ["Total", "", "100.0%", "650.00"]]
+
+    assert say(client, "approve")["title"] == "Split saved: 2 line(s) tagged"
+    wages = JournalLine.objects.get(description="Wages")
+    assert [(t.dimension_value.code, t.allocation) for t in wages.tags.all()] == [("ABBA", D("0.75"))]
+    assert not SplitRule.objects.filter(name="labour").exists()  # shares come from the month, not a saved rule
+
+    review = tables(say(client, "/labour --Sep 2026"))
+    lines = {r[0]: r[1] for r in review[next(iter(review))]}
+    assert lines["Labour per pay runs (September 2026 days)"] == "400.00"
+    assert lines["In Xero now"] == "650.00" and lines["Difference"] == "(250.00)"
+
+
+def test_labour_rule_name_is_kept_for_labour_mode(client, org, event):
+    bad = [["labour", "477", "all", "", "", "", "", "Event", "ABBA", "100", ""]]
+    assert "can't be a rule name" in error(client, "/splittag --Sep 2026 <<", [rules_file(bad)])
+    assert "No pay run has days in September 2026" in error(client, "/splittag --labour --Sep 2026")

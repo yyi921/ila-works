@@ -20,14 +20,14 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/bills` |  | Bills due in the next 7 days (or --due <days>), with overdue bills listed first. | `/bills [--due <days>] [--overdue] [>> file.xlsx]` |
 | `/accrue` |  | Month-end accrual review: proposed accruals by source with their evidence; accept, adjust or reject each, then build the journal file. | `/accrue [--<period>] [--read \| --refresh]` |
 | `/review` |  | Month-end P&L review: the P&L by group with GP, COGS, labour, EBITDA and net profit % against last month, last year or budget (MTD or YTD), GL accounts per group (L1), and your review requests; leave notes and sign off by account code, group or RR-01. | `/review [--<period>] [--vs lm\|ly\|budget] [--mtd\|--ytd] [--L0\|--L1] [--<group> ...] [--refresh]` |
-| `/labour` |  | Upload a pay-run file into iLA's labour ledger, or list the pay runs; each is checked against its Summary total and the payroll journal in Xero; uploading also builds the pay run's journal (ADJ, Expected). | `/labour [<< breakdown.xlsx] [--<period>]` |
+| `/labour` |  | Upload a pay-run file into iLA's labour ledger (checked against its Summary total and the payroll journal in Xero), list the pay runs, or review a month's labour against Xero. Uploading also builds the pay run's journal (ADJ, Expected). | `/labour [<< breakdown.xlsx] [--<period>]` |
 | `/reconcile` | `/recon`, `/rec` | Month-end balance sheet reconciliation: each account's Xero balance against its support, with reconciling items, schedules and preparer/reviewer sign-off. | `/reconcile [<account>] [--<period>] [<< schedule.csv] \| /reconcile --bank \| /reconcile --template` |
 | `/compare` |  | Compare bills, invoices or a P&L measure month by month to spot unusual, new or missing amounts. | `/compare --bill\|--invoice [<number>] [--supplier\|--customer <name or code>] [--account <code or name>] [--by account] [--<period>] [--detail] [--min <amount>]   or   /compare --revenue\|--cos\|--gp\|--expenses\|--profit [--<period>]` |
 | `/inv` | `/invoice`, `/bill` | Show one invoice, bill or credit note by its number. | `/inv <number>` |
 | `/find` | `/search` | Search contacts, and invoices and bills by number or reference. | `/find <text>` |
 | `/dim` | `/dimensions`, `/dims` | What you can tag by: Xero tracking categories (2 active, 4 in all) and iLA's own dimensions (no limit). | `/dim [<name>] [--archived]` |
 | `/tag` |  | Tag invoices, bills, credit notes, bank transactions or journals to a value of an iLA dimension, e.g. events. Preview first; nothing is tagged until you approve. | `/tag --dim <dimension> --invoices\|--bills\|--credits\|--bank\|--journals\|--all --<period> [--desc <text>] [--contact <name>] [--account <code or name>] [--amount <range>] [--xero <category> [<option>]] [--attachment] [--retag] [--to <value>] [--window <days>]` |
-| `/splittag` |  | Split the amounts on chosen GL accounts across a dimension's values (e.g. labour across events) by fixed amounts, percentages or both, from a CSV of named rules or a saved rule. | `/splittag [<< rules.csv] [--<rule name>\|--rule <name>] [--<period>] [--gl <accounts>] [--invoices --bills --credits --bank --journals\|--all] [--contact <name>] [--desc <text>] [--template]` |
+| `/splittag` |  | Split the amounts on chosen GL accounts across a dimension's values (e.g. labour across events) by fixed amounts, percentages or both, from a CSV of named rules or a saved rule. | `/splittag [<< rules.csv] [--<rule name>\|--rule <name>\|--labour] [--<period>] [--gl <accounts>] [--invoices --bills --credits --bank --journals\|--all] [--contact <name>] [--desc <text>] [--template]` |
 | `/createTag` |  | Set up a dimension to tag by from a CSV of its values: brand new, or replacing a Xero tracking category so iLA shows names instead of codes. | `/createTag [<name>] [--new] [<< values.csv]` |
 | `/orgs` |  | List your organisations; * marks the one in use. | `/orgs` |
 | `/use` |  | Switch to another organisation. | `/use <name>` |
@@ -222,14 +222,14 @@ In an open review, refer to lines by account code (`4061`, `6300-6380`), group (
 
 ### /labour
 
-Upload a pay-run file into iLA's labour ledger, or list the pay runs; each is checked against its Summary total and the payroll journal in Xero; uploading also builds the pay run's journal (ADJ, Expected).
+Upload a pay-run file into iLA's labour ledger (checked against its Summary total and the payroll journal in Xero), list the pay runs, or review a month's labour against Xero. Uploading also builds the pay run's journal (ADJ, Expected).
 
 Usage: `/labour [<< breakdown.xlsx] [--<period>]`
 
 | Parameter | Meaning |
 | --- | --- |
 | `<< breakdown.xlsx` | The payroll file for one pay run (TECC: the Micropay employee breakdown). Only employee code and name are kept; the same pay run again replaces it. |
-| `--<period>` | List the pay runs with days in the period, e.g. Oct 2026. |
+| `--<period>` | Review the month: pay runs (their days in it) and an estimate for days with no pay run yet, against Xero; then by account, department, event and pay run. |
 
 Examples:
 
@@ -367,12 +367,13 @@ Examples:
 
 Split the amounts on chosen GL accounts across a dimension's values (e.g. labour across events) by fixed amounts, percentages or both, from a CSV of named rules or a saved rule.
 
-Usage: `/splittag [<< rules.csv] [--<rule name>|--rule <name>] [--<period>] [--gl <accounts>] [--invoices --bills --credits --bank --journals|--all] [--contact <name>] [--desc <text>] [--template]`
+Usage: `/splittag [<< rules.csv] [--<rule name>|--rule <name>|--labour] [--<period>] [--gl <accounts>] [--invoices --bills --credits --bank --journals|--all] [--contact <name>] [--desc <text>] [--template]`
 
 | Parameter | Meaning |
 | --- | --- |
 | `<< rules.csv` | Rules to apply; approving also saves them by name. /splittag --template for the file. |
-| `--<rule name>  or  --rule <name>` | Run a saved rule (several: --rule labour, casuals). |
+| `--<rule name>  or  --rule <name>` | Run a saved rule (several: --rule wages, casuals). |
+| `--labour` | Share the month's labour across events by its pay runs: the variance against Xero first, then each event's share; approve tags the labour accounts. |
 | `--<period>` | Sep 2026, last month, Jul 2026 to Sep 2026; both dates included. Needed unless the file has From and To. |
 | `--gl <accounts>` | Change the accounts for this run: 6300-6380, 6355 or 6300-6380; 6400. |
 | `--invoices --bills --credits --bank --journals --all` | Change the transaction types for this run. |

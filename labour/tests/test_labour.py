@@ -240,9 +240,10 @@ def test_console_upload_and_list(console, org):
     assert result["link"].endswith("?mapping=missing")
 
     listed = say(console, "/labour --Oct 2026")
-    rows = [b for b in listed["blocks"] if b["type"] == "table"][0]["rows"]
-    assert rows[0]["cells"][0] == "18 Oct 2026" and rows[0]["cells"][5] == "Yes"
-    assert say(console, "/labour --Dec 2026")["blocks"][0]["rows"] == []
+    runs = next(b for b in listed["blocks"] if b["type"] == "table" and b["title"] == "By pay run")["rows"]
+    assert runs[0]["cells"][0] == "18 Oct 2026" and runs[0]["cells"][3] == "Yes"
+    december = say(console, "/labour --Dec 2026")
+    assert next(b for b in december["blocks"] if b["title"] == "By pay run")["rows"] == []
 
 
 def test_console_rejects_other_files(console):

@@ -4,6 +4,8 @@
 ``/splittag << labour.csv [--Sep 2026]``   read rules from a file (they're saved by name when approved)
 ``/splittag --labour --Sep 2026``          re-run a saved rule (also ``--rule labour``)
 ``/splittag --labour --Sep 2026 --gl 6355 --journals``   ... with its scope changed for this run only
+``/splittag --labour --Oct 2026``          labour across events by the month's pay runs (labour.review): the
+                                           variance first, then the event shares; approve tags the month's labour
 ``/splittag``                              list the saved rules
 
 A rule has a scope (accounts, transaction types, optional contact and description filters, a period) and allocation
@@ -47,7 +49,8 @@ ZERO, ONE, HUNDRED = Decimal("0"), Decimal("1"), Decimal("100")
 SHARE = Decimal("0.000000000001")
 CENT = Decimal("0.01")
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,39}$")
-RESERVED = set(KINDS) | {"all", "gl", "rule", "contact", "desc", "template", "new", "list", "by", "to"}
+RESERVED = set(KINDS) | {"all", "gl", "rule", "contact", "desc", "template", "new", "list", "by", "to", "labour"}
+LABOUR = "labour"
 TYPE_WORDS = {"invoice": "invoices", "invoices": "invoices", "bill": "bills", "bills": "bills",
               "credit": "credits", "credits": "credits", "credit notes": "credits", "bank": "bank",
               "journal": "journals", "journals": "journals", "manual journals": "journals"}
@@ -55,8 +58,8 @@ CANCEL_WORDS = {"cancel", "/cancel", "stop", "quit"}
 MAX_FILE_BYTES = 2 * 1024 * 1024
 TEMPLATE_ROWS = [
     ["Rule", "Accounts", "Types", "Contact", "Description", "From", "To", "Dimension", "Value", "Amount", "Percent"],
-    ["labour", "6300-6380", "all", "", "", "01/09/2026", "30/09/2026", "Event", "260902MEC", "100", ""],
-    ["labour", "6300-6380", "all", "", "", "01/09/2026", "30/09/2026", "Event", "260910COW", "300", ""],
+    ["wages", "6300-6380", "all", "", "", "01/09/2026", "30/09/2026", "Event", "260902MEC", "100", ""],
+    ["wages", "6300-6380", "all", "", "", "01/09/2026", "30/09/2026", "Event", "260910COW", "300", ""],
     ["casuals", "6355", "journals", "", "", "01/09/2026", "30/09/2026", "Event", "260910COW", "", "30"],
     ["casuals", "6355", "journals", "", "", "01/09/2026", "30/09/2026", "Event", "260902MEC", "", "20"],
 ]
@@ -98,11 +101,12 @@ def start(ctx, cmd):
     if org is None:
         raise CommandError("No organisation selected. Use /orgs to list them and /use <name> to pick one.")
     saved = {r.name.lower(): r for r in SplitRule.objects.filter(organisation=org).select_related("dimension")}
-    params = read_params(cmd, ctx, flags=set(KINDS) | {"all", "template"} | (set(saved) - RESERVED), period=True,
-                         keyed={"gl": _text, "rule": _text, "contact": _text, "desc": _text})
+    params = read_params(cmd, ctx, flags=set(KINDS) | {"all", "template", LABOUR} | (set(saved) - RESERVED),
+                         period=True, keyed={"gl": _text, "rule": _text, "contact": _text, "desc": _text})
     if cmd.text:
         raise CommandError(f'Put every option after "--", e.g. /splittag --{cmd.text} --Sep 2026.')
-    chosen = [f for f in params.flags if f in saved] or params.values.get("rule")
+    labour = LABOUR in params.flags and not cmd.input_file
+    chosen = [f for f in params.flags if f in saved and f not in RESERVED] or params.values.get("rule") or labour
     if "template" in params.flags or (not cmd.input_file and not chosen):
         return _guide(saved, params.period)
 
@@ -110,12 +114,14 @@ def start(ctx, cmd):
         rules = _rules_from_file(ctx, ctx.input_file)
         from_file = True
     else:
-        names = [f for f in params.flags if f in saved]
+        names = [f for f in params.flags if f in saved and f not in RESERVED]
         names += [n.strip().lower() for n in params.values.get("rule", "").split(",") if n.strip()]
         missing = [n for n in names if n not in saved]
         if missing:
             raise CommandError(f'No saved split rule called "{missing[0]}". ' + _saved_names(saved))
         rules = [_rule_from_saved(saved[n]) for n in dict.fromkeys(names)]
+        if labour:
+            rules.insert(0, _labour_rule(org, params.period))
         from_file = False
 
     overrides = {}
@@ -394,7 +400,7 @@ def _compute(org, rule):
     for a in rule["allocations"]:
         if a["percent"]:
             share = (Decimal(a["percent"]) / HUNDRED * left).quantize(SHARE, ROUND_DOWN)
-            basis = f"{Decimal(a['percent']):g}%" + (" of what's left" if fixed else "")
+            basis = a.get("basis") or f"{Decimal(a['percent']):g}%" + (" of what's left" if fixed else "")
             shares.append({"value": a["value"], "code": a["code"], "basis": basis, "share": str(share)})
     targets = _targets(total, rule["allocations"])
     rule["lines"] = _line_shares(lines, total, targets)
@@ -488,7 +494,8 @@ def _approve(ctx, run):
                                status=Tag.Status.CONFIRMED, set_by=ctx.user, rule=f"split:{rule['name']}"[:100],
                                batch=batch, note=f"/splittag {run.pk} {rule['period'][2]}", partial=True)
                 tagged += 1
-            saved = SplitRule.objects.filter(organisation=ctx.organisation, name__iexact=rule["name"]).first()
+            saved = None if rule.get("labour") else SplitRule.objects.filter(
+                organisation=ctx.organisation, name__iexact=rule["name"]).first()
             if run.data.get("save_rules"):
                 saved = saved or SplitRule(organisation=ctx.organisation, created_by=ctx.user)
                 saved.name, saved.dimension = rule["name"], dimension
@@ -516,7 +523,8 @@ def _approve(ctx, run):
 # --- Display ----------------------------------------------------------------------------------------------------
 
 GUIDE_ROWS = (
-    ("Rule", "A name, e.g. labour. Rows with the same name make one rule; it's saved so you can run it again."),
+    ("Rule", "A name, e.g. wages (not labour: that's /splittag --labour). Rows with the same name make one rule; "
+             "it's saved so you can run it again."),
     ("Accounts", "6300-6380, 6355, or a list: 6300-6380; 6400."),
     ("Types", "all, or any of invoices, bills, credits, bank, journals (e.g. journals for only the journals)."),
     ("Contact, Description", "Optional: only lines whose contact or description contains this."),
@@ -580,6 +588,8 @@ def show(run, *, intro=""):
         Figure("Left untagged", (total - allocated).quantize(Decimal("0.01")), MONEY),
     ]))
     for rule in rules:
+        if rule.get("labour"):
+            _labour_variance(result, rule)
         scope = rule["scope"]
         label = (f"{rule['name']}: {_accounts_label(scope['accounts'])} · "
                  + ("all types" if set(scope["types"]) == set(KINDS) else ", ".join(scope["types"]))
@@ -607,6 +617,59 @@ def show(run, *, intro=""):
     result.add(Note("Type approve to tag these lines with these shares, or cancel. Amounts per line are worked out "
                     "to the cent in reports.", "warning"))
     return result
+
+
+def _labour_rule(org, period):
+    """The labour rule for the period: the labour accounts, every type, each event's share of the month's labour
+    per the pay runs (Labour view, after people's changes); Unassigned's share stays untagged."""
+    from labour import review  # noqa: PLC0415
+    from labour.ledger import settings_for  # noqa: PLC0415
+
+    if period is None:
+        raise CommandError("Give the month, e.g. /splittag --labour --Oct 2026.")
+    dimension = settings_for(org).event_dimension
+    if dimension is None:
+        raise CommandError("Choose the dimension labour is shared by (e.g. Event) in Labour settings first.")
+    r = review.month_review(org, period.start, period.end)
+    if not r.runs:
+        raise CommandError(f"No pay run has days in {period.label}. Upload them with /labour << breakdown.xlsx.")
+    ranges, _, how = review.labour_accounts(org)
+    shares = review.event_shares(r)
+    allocations = []
+    for value, amount, share in shares:
+        percent = (share * HUNDRED).quantize(Decimal("0.0000000001"), ROUND_DOWN)
+        if percent > 0:
+            allocations.append({"value": value.pk, "code": value.code, "amount": None, "percent": str(percent),
+                                "basis": f"{amount:,.2f} of labour"})
+    if not allocations:
+        raise CommandError(f"No labour in {period.label} went to an event: check the event dates (Labour view).")
+    return {"name": LABOUR, "dimension": dimension.pk,
+            "scope": {"accounts": ranges, "types": list(KINDS), "contact": "", "desc": ""},
+            "allocations": allocations,
+            "period": [period.start.isoformat(), period.end.isoformat(), period.label],
+            "labour": {"journal": {code: str(v) for code, v in r.journal_by_account.items()}, "estimate": str(r.estimate_total), "accounts_how": how,
+                       "unassigned": str(r.unassigned), "stub": (f"{r.stub_days[0]:%d/%m}–{r.stub_days[-1]:%d/%m}"
+                                                                 if r.stub_days else "")}}
+
+
+def _labour_variance(result, rule):
+    """Review first: the pay-run journals for the month against the actual labour in Xero on the same accounts."""
+    data = rule["labour"]
+    journal = sum((Decimal(v) for code, v in data["journal"].items() if _account_in(code, rule["scope"]["accounts"])),
+                  ZERO)
+    xero = Decimal(rule["total"])
+    accounts = _accounts_label(rule["scope"]["accounts"])
+    table = result.add(Table([Column("Labour"), Column("$", MONEY), Column("%", PCT)],
+                             title=f"Labour: pay runs against Xero ({accounts})"))
+    table.add(f"Labour journal, {rule['period'][2]} days", journal, None)
+    table.add(f"Actual labour in Xero, {rule['period'][2]}", xero, None)
+    table.add("Variance", journal - xero, (journal - xero) / xero if xero else None, total=True)
+    if Decimal(data["estimate"]):
+        result.add(Note(f"Days with no pay run yet ({data['stub']}) are estimated at {Decimal(data['estimate']):,.2f} "
+                        "(see /labour). The shares below come from the pay runs only."))
+    result.add(Note("If the variance is large, fix the cause first (a missing pay run, an accrual, the event calendar) "
+                    "and run this again. Approving tags every line on these accounts in Xero for the month by the "
+                    "event shares; Unassigned stays untagged. Running it again replaces the split."))
 
 
 def template_csv():

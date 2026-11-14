@@ -2,19 +2,22 @@
 
 ``/labour << breakdown.xlsx``  reads the file into the labour ledger, then shows what it adds up to by cost account
                                and against the payroll journal posted in Xero for the same pay run.
-``/labour [--<period>]``       lists the pay runs (touching the period, if given).
+``/labour``                    lists the latest pay runs.
+``/labour --<month>``          the month's labour: pay runs (their days in the month) and the estimate for days with
+                               no pay run yet, against Xero; then by department, event and pay run.
 """
 
 from datetime import timedelta
 
 from django.urls import reverse
 
-from console.output import DATE, MONEY, NUMBER, TEXT, Column, Figure, Figures, Note, Result, Table
+from console.output import DATE, MONEY, NUMBER, PCT, TEXT, Column, Figure, Figures, Note, Result, Table
 from console.registry import CommandError, read_params
 from xero.api import XeroAPIError
 from xero.sync import copy_period
 
 from . import journal, ledger
+from . import review as labour_review
 from .micropay import FileError
 from .models import PayRun
 
@@ -32,7 +35,9 @@ def run(ctx, cmd):
         if params.period:
             raise CommandError("A pay-run file says its own period: drop the period, e.g. /labour << file.xlsx.")
         return _upload(ctx, ctx.input_file)
-    return _list(ctx, params.period)
+    if params.period:
+        return _review(ctx, params.period)
+    return _list(ctx, None)
 
 
 def _upload(ctx, upload):
@@ -151,4 +156,58 @@ def _list(ctx, period):
     else:
         out.add(Note("Upload another pay run with /labour << breakdown.xlsx. Each pay run's lines are in admin "
                      "(Labour → Pay runs)."))
+    return out
+
+
+def _review(ctx, period):
+    r = labour_review.month_review(ctx.organisation, period.start, period.end)
+    out = Result(f"{TITLE} · {period.label}", subtitle=f"Labour accounts: {r.accounts_label} ({r.accounts_how})")
+    stub = (f"{r.stub_days[0]:%d/%m}–{r.stub_days[-1]:%d/%m}" if r.stub_days else "")
+    table = out.add(Table([Column("Line"), Column("$", MONEY)]))
+    table.add(f"Labour per pay runs ({period.label} days)", r.pay_runs)
+    if r.stub_days:
+        table.add(f"Estimate, no pay run yet ({stub})", r.estimate_total)
+    table.add("Labour for the month", r.month_total, total=True)
+    table.add("In Xero now", r.xero)
+    table.add("Difference", r.difference, total=True)
+    for run, amount, in_xero in r.runs:
+        if not in_xero and amount:
+            table.add(f"  of which: pay run {run.period_end:%d/%m} not in Xero", amount)
+    if r.stub_days:
+        table.add(f"  of which: estimate {stub}", r.estimate_total)
+    table.add("  of which: other (accruals, reversals, timing, mapping)", r.other)
+
+    accounts = out.add(Table([Column("Account"), Column("Pay-run journals", MONEY), Column("In Xero", MONEY),
+                              Column("Difference", MONEY)], title="By account"))
+    for code in sorted(set(r.journal_by_account) | set(r.xero_by_account)):
+        a, x = r.journal_by_account.get(code, 0), r.xero_by_account.get(code, 0)
+        accounts.add(code, a, x, a - x, tone="warn" if a != x else "")
+    a, x = sum(r.journal_by_account.values()), sum(r.xero_by_account.values())
+    accounts.add("Total", a, x, a - x, total=True)
+
+    departments = out.add(Table([Column("Department"), Column("Employees", NUMBER), Column("Hours", NUMBER),
+                                 Column("$", MONEY)], title="By department (pay runs)"))
+    for name, employees, hours, amount in r.departments:
+        departments.add(name, employees, hours, amount)
+    departments.add("Total", None, None, sum(d[3] for d in r.departments), total=True)
+
+    events = out.add(Table([Column("Event"), Column("$", MONEY), Column("Share", PCT)], title="By event (pay runs)"))
+    event_total = sum(a for _, a in r.events) + r.unassigned
+    for value, amount in r.events:
+        events.add(f"{value.code} {value.name}" if value.name != value.code else value.code, amount,
+                   amount / event_total if event_total else None)
+    events.add("Unassigned", r.unassigned, r.unassigned / event_total if event_total else None)
+    events.add("Total", event_total, 1 if event_total else None, total=True)
+
+    runs = out.add(Table([Column("Pay run ending", DATE), Column("Days worked from", DATE),
+                          Column(f"{period.label} days", MONEY), Column("In Xero")], title="By pay run"))
+    for run, amount, in_xero in r.runs:
+        runs.add(run.period_end, run.period_start, amount, "Yes" if in_xero else "Not yet")
+    if r.estimate:
+        out.add(Note(f"{r.estimate.reference}: {r.estimate.narration}, {r.estimate.evidence}. "
+                     f"{r.estimate.note} Expected; replaced when the pay run arrives."))
+    out.add(Note("Employees and days: Admin → Labour → Labour view. Share labour out by event: "
+                 f"/splittag --labour --{period.label}."))
+    out.link = reverse("admin:labour_view") + f"?organisation={ctx.organisation.pk}&month={period.start:%Y-%m}"
+    out.link_text = "Open the Labour view"
     return out
