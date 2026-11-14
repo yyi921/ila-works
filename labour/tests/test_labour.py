@@ -258,3 +258,61 @@ def test_admin_upload_and_run_page(client, org):
     assert "isn&#x27;t an Excel workbook" in bad.content.decode()
     page = client.get("/admin/labour/costaccount/?mapping=missing").content.decode()
     assert "700-2600" in page
+
+
+# --- Cost accounts from a CSV -----------------------------------------------------------------------------------
+
+def cost_csv(rows):
+    out = io.StringIO()
+    import csv
+
+    csv.writer(out).writerows(rows)
+    return out.getvalue()
+
+
+def test_cost_accounts_from_csv_are_checked_then_saved(org):
+    from labour.cost_accounts import import_csv, to_csv
+
+    CostAccount.objects.create(organisation=org[0], code="700-2100", name="TECC - Fixed Wages", gl_account="6345")
+    bad = import_csv(org[0], org[1], cost_csv([
+        ["Code", "Name", "Department", "GL account", "Can go to an event"],
+        ["700-3000", "TECC - F&B Service", "Kitchen", "9999", "maybe"],
+        ["700-3000", "Again", "", "", ""], ["", "No code", "", "", ""]]))
+    assert bad.problems == [
+        "Row 2 (700-3000): Kitchen isn't one of Xero's departments (Event Hire & Service Recoveries, Food and "
+        "Beverage Services, Overhead & Venue Costs).",
+        "Row 2 (700-3000): GL account 9999 isn't in the chart of accounts.",
+        "Row 2 (700-3000): Can go to an event must be yes or no, not maybe.",
+        "Row 3: 700-3000 is also on row 2.", "Row 4: Code is empty."]
+    assert CostAccount.objects.count() == 1  # nothing saved
+
+    good = import_csv(org[0], org[1], "﻿" + cost_csv([
+        ["Cost Account Code", "Name", "Department", "GL", "Can go to an event"],
+        ["700-3000", "TECC - F&B Service", "food and beverage services", "6345", "yes"],
+        ["700-2100", "", "Overhead & Venue Costs", "", "no"]]))
+    assert not good.problems and good.created == ["700-3000"] and good.updated == ["700-2100"]
+    fb, fixed = CostAccount.objects.get(code="700-3000"), CostAccount.objects.get(code="700-2100")
+    assert (fb.department, fb.gl_account, fb.taggable) == ("Food and Beverage Services", "6345", True)
+    assert (fixed.name, fixed.gl_account, fixed.taggable) == ("TECC - Fixed Wages", "6345", False)  # blanks kept
+    again = import_csv(org[0], org[1], to_csv(org[0]))
+    assert again.unchanged == 2 and not again.created and not again.updated
+    assert to_csv(org[0]).splitlines()[1] == "700-2100,TECC - Fixed Wages,Overhead & Venue Costs,6345,no"
+    assert "Unknown column \"Venue\"" in import_csv(org[0], org[1], "Code,Venue\nA,B\n").problems[0]
+
+
+def test_admin_cost_account_csv_buttons(client, org):
+    boss = get_user_model().objects.create_superuser("boss", password="pw")
+    client.force_login(boss)
+    page = client.get("/admin/labour/costaccount/").content.decode()
+    assert "Upload cost accounts (CSV)" in page and f"/download/?organisation={org[0].pk}" in page
+    csv_text = client.get(f"/admin/labour/costaccount/download/?organisation={org[0].pk}").content.decode("utf-8-sig")
+    assert csv_text.splitlines()[0] == "Code,Name,Department,GL account,Can go to an event"
+    bad = client.post("/admin/labour/costaccount/upload/", {"organisation": org[0].pk, "file": SimpleUploadedFile(
+        "cost.csv", b"Code,Department\n700-3000,Kitchen\n")}).content.decode()
+    assert "isn&#x27;t one of Xero&#x27;s departments" in bad and "Nothing was saved" in bad
+    response = client.post("/admin/labour/costaccount/upload/", {"organisation": org[0].pk, "file": SimpleUploadedFile(
+        "cost.csv", b"Code,Department,GL account\n700-3000,Food and Beverage Services,6345\n")})
+    assert response.status_code == 302 and CostAccount.objects.get(code="700-3000").gl_account == "6345"
+    wrong = client.post("/admin/labour/costaccount/upload/", {"organisation": org[0].pk, "file": SimpleUploadedFile(
+        "cost.xlsx", b"x")}).content.decode()
+    assert "isn&#x27;t a CSV file" in wrong
