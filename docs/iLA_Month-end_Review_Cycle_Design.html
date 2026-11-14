@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iLA — The month-end review cycle (design, v2)</title>
+<style>
+  :root {
+    --ink: #1d2433; --muted: #5b6475; --line: #dfe3ea; --soft: #f5f7fa; --accent: #2f5bd3;
+    --accent-soft: #e8eefc; --ok: #1f7a4d; --ok-soft: #e6f4ec; --warn: #a15c00; --warn-soft: #fdf1df;
+    --bad: #b3261e; --mono: "Cascadia Mono", Consolas, "SFMono-Regular", monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.6 "Segoe UI", Arial, sans-serif; color: var(--ink); background: #fff; }
+  header { background: linear-gradient(135deg, #1d2a4d, #2f5bd3); color: #fff; padding: 48px 24px 40px; }
+  header .wrap { max-width: 1040px; margin: 0 auto; }
+  header h1 { margin: 0 0 8px; font-size: 32px; letter-spacing: -0.3px; }
+  header p { margin: 0; opacity: 0.9; max-width: 780px; }
+  header .meta { margin-top: 18px; font-size: 13px; opacity: 0.75; }
+  nav { position: sticky; top: 0; z-index: 5; background: #fff; border-bottom: 1px solid var(--line); }
+  nav .wrap { max-width: 1040px; margin: 0 auto; padding: 10px 24px; display: flex; flex-wrap: wrap; gap: 6px 18px;
+              font-size: 13px; }
+  nav a { color: var(--muted); text-decoration: none; }
+  nav a:hover { color: var(--accent); }
+  main { max-width: 1040px; margin: 0 auto; padding: 8px 24px 64px; }
+  section { padding-top: 28px; }
+  h2 { font-size: 22px; margin: 18px 0 10px; padding-bottom: 6px; border-bottom: 2px solid var(--accent-soft); }
+  h2 .n { color: var(--accent); margin-right: 8px; }
+  h3 { font-size: 16px; margin: 22px 0 8px; }
+  p { margin: 8px 0; }
+  code, .mono { font-family: var(--mono); font-size: 13px; background: var(--soft); padding: 1px 5px; border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 16px; font-size: 14px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--soft); font-weight: 600; font-size: 13px; color: var(--muted); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.total td { font-weight: 700; border-top: 2px solid var(--ink); }
+  .lead { font-size: 17px; background: var(--accent-soft); border-left: 4px solid var(--accent); padding: 14px 18px;
+          border-radius: 6px; }
+  .note { background: var(--soft); border-radius: 6px; padding: 10px 14px; font-size: 14px; color: var(--muted); }
+  .changed { background: #fff8e1; border: 1px solid #f2d3a6; border-radius: 6px; padding: 10px 14px; font-size: 14px; }
+  .changed b { color: var(--warn); }
+  .flow { display: flex; align-items: stretch; margin: 16px 0; flex-wrap: wrap; }
+  .flow .box { flex: 1 1 150px; border: 1px solid var(--line); border-radius: 8px; padding: 12px; text-align: center;
+               background: #fff; min-width: 140px; }
+  .flow .box b { display: block; font-size: 15px; }
+  .flow .box span { font-size: 12px; color: var(--muted); }
+  .flow .arrow { align-self: center; padding: 0 6px; color: var(--accent); font-size: 22px; }
+  .flow .box.xero { background: var(--soft); }
+  .flow .box.post { background: var(--ok-soft); border-color: #bfe3cf; }
+  .flow .box.expect { background: var(--warn-soft); border-color: #f2d3a6; }
+  .flow .box.land { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .flow .box.land span { color: #dfe6fb; }
+  .cycle { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0 6px; }
+  .cycle .step { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .cycle .step .k { display: inline-block; width: 24px; height: 24px; border-radius: 12px; background: var(--accent);
+                    color: #fff; text-align: center; font-weight: 700; font-size: 13px; line-height: 24px;
+                    margin-right: 6px; }
+  .cycle .step b { font-size: 15px; }
+  .cycle .step .cmd { display: block; margin-top: 4px; font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .cycle .step p { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+  .loop { text-align: center; color: var(--muted); font-size: 13px; }
+  .lock { margin: 12px auto 0; max-width: 560px; text-align: center; border: 2px dashed var(--ink); border-radius: 8px;
+          padding: 10px; font-size: 14px; }
+  .buckets { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 10px; align-items: center; margin: 14px 0; }
+  .buckets .b { border-radius: 8px; padding: 12px 14px; border: 1px solid var(--line); font-size: 14px; }
+  .buckets .b h4 { margin: 0 0 4px; font-size: 15px; }
+  .buckets .b.e { background: var(--warn-soft); border-color: #f2d3a6; }
+  .buckets .b.t { background: var(--ok-soft); border-color: #bfe3cf; }
+  .buckets .b.x { background: var(--soft); }
+  .buckets .ar { text-align: center; font-size: 12px; color: var(--accent); }
+  .buckets .ar b { display: block; font-size: 22px; line-height: 1; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .card h4 { margin: 0 0 6px; font-size: 15px; }
+  .card p, .card li { font-size: 14px; }
+  ul, ol { padding-left: 22px; margin: 8px 0; }
+  li { margin: 4px 0; }
+  .warn { color: var(--warn); font-weight: 600; }
+  .ok { color: var(--ok); font-weight: 600; }
+  pre { font-family: var(--mono); font-size: 13px; background: #0f172a; color: #e2e8f0; padding: 14px 16px;
+        border-radius: 8px; overflow-x: auto; line-height: 1.5; }
+  .q { border-left: 4px solid var(--warn); background: var(--warn-soft); padding: 10px 14px; border-radius: 6px;
+       margin: 10px 0; }
+  .q b { color: var(--warn); }
+  footer { max-width: 1040px; margin: 0 auto; padding: 24px; color: var(--muted); font-size: 12px;
+           border-top: 1px solid var(--line); }
+  @media (max-width: 760px) {
+    .cycle, .grid2 { grid-template-columns: 1fr; }
+    .buckets { grid-template-columns: 1fr; }
+    .flow .arrow { width: 100%; text-align: center; }
+  }
+  @media print { nav { display: none; } header { background: #1d2a4d; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>The month-end review cycle</h1>
+    <p>A design for iLA: a senior accountant reviews, adjusts and completes the month from the console, without
+       going into Xero, and always sees two numbers side by side: where the accounts are now and where they will
+       land.</p>
+    <div class="meta">TECC · version 4, 7 November 2026 · progress notes 8 and 14 November 2026 · build steps 1 (/review) and 2 (labour) done</div>
+  </div>
+</header>
+
+<nav>
+  <div class="wrap">
+    <a href="#idea">1 · The idea</a>
+    <a href="#buckets">2 · Overlay journals &amp; buckets</a>
+    <a href="#views">3 · The views</a>
+    <a href="#cycle">4 · The cycle</a>
+    <a href="#review">5 · /review</a>
+    <a href="#actions">6 · Actions</a>
+    <a href="#status">7 · /status</a>
+    <a href="#intelligence">8 · Intelligence</a>
+    <a href="#labour">9 · Labour example</a>
+    <a href="#fit">10 · Fit</a>
+    <a href="#build">11 · Build order</a>
+    <a href="#questions">12 · Decisions</a>
+    <a href="#progress">13 · Progress 8 Nov</a>
+    <a href="#progress-labour">14 · Progress 14 Nov: labour</a>
+  </div>
+</nav>
+
+<main>
+
+<section>
+  <div class="changed"><b>What changed in version 4.</b> Your answers to the questions are now decisions (section 12)
+    and are written into the sections they affect. The build order is re-sequenced (section 11).
+    <ul>
+      <li><b>To post</b> means agreed or started by a person: journals you make go straight there. <b>Expected</b> is iLA's
+        estimates, until you approve them. Both are columns in the landing view.</li>
+      <li>Materiality is yours to set for each core check. By default, any movement over <b>$1,000</b> either way is
+        raised. You can change each check to a $ amount, a %, points, or a combination.</li>
+      <li>Labour (and any other stream) can be fed by several input sources, set up per organisation.</li>
+      <li>The management pack is the landing view by default (changeable in admin). One person approves. Anything still
+        in Expected at lock is archived. Only admins confirm review requests.</li>
+    </ul>
+  </div>
+  <div class="changed"><b>What changed in version 3.</b>
+    <ul>
+      <li><span class="mono">/review</span> is about the P&amp;L for now (balance sheet later). It runs a set of
+        <b>core P&amp;L checks</b> by default: the last full month against last month, the same month last year and
+        budget; YTD against budget; COGS %, labour %, EBITDA % and net profit %. Each one can be switched off in admin.</li>
+      <li>On top of those, you add <b>review requests</b> (RR-01, RR-02, …) in admin. Each one starts as a plain-English
+        prompt. iLA turns it into a saved check, you <b>trial run</b> it on the last 1 or 2 months, and you confirm it
+        once you're happy. From then on it runs every time anyone types <span class="mono">/review</span>.</li>
+      <li><span class="mono">/review</span> = the core checks + every confirmed review request. Each request's
+        result appears exactly as it looked in its trial run.</li>
+      <li>Event recovery % is no longer a built-in check. It becomes TECC's own review request (section 5).</li>
+    </ul>
+  </div>
+  <div class="changed"><b>What changed in version 2.</b>
+    <ul>
+      <li>Findings are <span class="mono">/review</span>: a hybrid iLA + human review of the P&amp;L analytics, COGS %,
+        event recovery % and any focus areas defined in admin, which is where iLA aims its intelligence.</li>
+      <li>Decide is about <b>actions</b> (<span class="mono">/accrue</span>, <span class="mono">/tag</span>,
+        <span class="mono">/reclass</span>, …) that put overlay journals into <b>Expected</b> or <b>To post</b>.</li>
+      <li>Two buckets in order: Expected (an estimate by iLA or you, not confirmed) → approved → To post → stamped as
+        posted → out of both buckets. Posting and refreshing Xero start the next cycle.</li>
+      <li>Approving, adjusting and rejecting overlay journals live in <span class="mono">/status</span>, which also gets
+        cash and the bank reconciliation status (missing today, see section 7).</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2>Where this starts from</h2>
+  <ul>
+    <li>Payroll is run by The Ville and arrives in Xero as <b>fortnightly manual journals</b>, e.g.
+      <i>"Ville for TECC Payroll Journal FNE: 12/07/2026"</i>, across the labour accounts: 6345 event staff,
+      6300 annual leave, 6335 payroll tax, 6370 super, 6380 Workcover, 6344 bonus.</li>
+    <li>Month-end labour accruals are typed by hand into 2000, e.g. <i>"Salary accrual for Oct-25 20-10 to
+      31-10"</i>.</li>
+    <li>The accrual engine already keeps payroll in its own section, but doesn't accrue it yet.</li>
+    <li><span class="mono">/status</span> today: with no period it shows cash at bank and a count of Xero transactions
+      not yet reconciled; with a period (<span class="mono">/status --Oct 2026</span>) it shows only budget and
+      last-year measures, with no cash or bank at all. Neither shows the bank reconciliation status from
+      <span class="mono">/reconcile</span>.</li>
+  </ul>
+</section>
+
+<section id="idea">
+  <h2><span class="n">1</span>The idea in one line</h2>
+  <p class="lead"><b>iLA's view of a month = Xero's actuals + a layer of overlay journals.</b> The senior accountant
+    works in that view, never in Xero, and keeps refining the layer until the month is locked. Only overlay journals
+    approved for posting ever reach Xero, as a stamped import file that a person imports.</p>
+  <div class="flow">
+    <div class="box xero"><b>Xero now</b><span>where it is</span></div>
+    <div class="arrow">+</div>
+    <div class="box post"><b>To post</b><span>agreed or started by you, not yet in Xero</span></div>
+    <div class="arrow">+</div>
+    <div class="box expect"><b>Expected</b><span>iLA's estimates, not yet approved</span></div>
+    <div class="arrow">=</div>
+    <div class="box land"><b>Landing</b><span>where it should land</span></div>
+  </div>
+</section>
+
+<section id="buckets">
+  <h2><span class="n">2</span>Overlay journals and the two buckets</h2>
+  <p>Every action produces the same thing: an <b>overlay journal</b>. It can be an accrual, a reclass, a correction, a
+    provision or an estimate. One overlay journal holds:</p>
+  <table>
+    <tr><th style="width:22%">Field</th><th>Example</th></tr>
+    <tr><td>Number</td><td><span class="mono">ADJ-0142</span> (never changes)</td></tr>
+    <tr><td>Period</td><td>Oct 2026</td></tr>
+    <tr><td>Lines</td><td>Dr 6345 Event staff 9,840 · Dr 6370 Super 1,181 · Dr 6335 Payroll tax 482 ·
+      Cr 2000 Accruals 11,503 (with tracking/event where known)</td></tr>
+    <tr><td>Made by</td><td>iLA (which action: <span class="mono">/accrue</span> labour, <span class="mono">/reconcile 2000</span>,
+      <span class="mono">/reclass</span>…) or a person (typed, or drafted from plain English)</td></tr>
+    <tr><td>Why, and the evidence</td><td>"6 stub days (26–31 Oct) not covered by FNE 25/10; FNE 08/11 posted in Xero
+      on 10 Nov covers them: 6/14 of it"</td></tr>
+    <tr><td>Confidence</td><td>Evidenced / estimated / judgement</td></tr>
+    <tr><td>Reverses</td><td>On the 1st of next month (default for accruals), or not</td></tr>
+    <tr><td>Bucket</td><td>Expected or To post (see below), with who moved it and when</td></tr>
+  </table>
+
+  <div class="buckets">
+    <div class="b e"><h4>Expected</h4>iLA's estimates, in the landing but <b>not yet agreed</b>. (You can also put one
+      of yours here, as an estimate only, with <span class="mono">expect</span>.)</div>
+    <div class="ar"><b>→</b>approve</div>
+    <div class="b t"><h4>To post</h4>Agreed, or started by you. Goes into the stamped import file for a person to
+      import.</div>
+    <div class="ar"><b>→</b>stamped as posted</div>
+    <div class="b x"><h4>Out of the buckets</h4>Now part of <b>Xero now</b> after the next refresh.</div>
+  </div>
+
+  <table>
+    <tr><th style="width:24%">Step</th><th>What happens</th></tr>
+    <tr><td>Into Expected</td><td>iLA's estimate from an action. It counts in the landing straight away, in the
+      Expected column, so you always know it's iLA's number and not yet agreed.</td></tr>
+    <tr><td>Into To post directly</td><td>Anything you make or start yourself (<span class="mono">/adj</span>, a
+      reclass you set up, an accrual you type). You've already agreed it.</td></tr>
+    <tr><td>Expected → To post</td><td>One person approves it (in <span class="mono">/status</span>). Still in the
+      landing, now in the To post column.</td></tr>
+    <tr><td>To post → stamped as posted</td><td>The import file is built and stamped; once a person has imported it
+      into Xero, it's marked posted. It stays counted in the layer until the next refresh <b>finds it in Xero</b>
+      (by the ADJ number in the narration, or its lines), so the landing never dips between posting and refreshing.
+      Then it leaves the buckets. <b>That is what stops double counting.</b></td></tr>
+    <tr><td>Rejected or withdrawn</td><td>Leaves the buckets, kept with its reason; the reason can become a rule.</td></tr>
+    <tr><td>Superseded</td><td>The real thing arrived before it was posted (the bill came in, or you posted your own
+      accrual in Xero). iLA links it to the overlay journal with the same linker the reconciliation uses, takes it out
+      of the buckets and shows how far the estimate was out.</td></tr>
+  </table>
+  <p class="note">Overlay journals that reverse do so in the layer next month, as Xero's auto-reversing journals do,
+    so November isn't distorted by October's estimates.</p>
+</section>
+
+<section id="views">
+  <h2><span class="n">3</span>The views: always two numbers side by side</h2>
+  <p>Every report can show the layer: <span class="mono">/pl --Oct 2026 --landing</span>, and the same for
+    <span class="mono">/bs</span>, <span class="mono">/tb</span> and <span class="mono">/pl --event</span>.</p>
+  <table>
+    <tr><th>Account</th><th class="num">Xero now</th><th class="num">To post</th><th class="num">Expected</th>
+      <th class="num">Landing</th><th class="num">Budget</th><th class="num">Last year</th>
+      <th class="num">Landing vs budget</th></tr>
+    <tr><td>6345 Event staff</td><td class="num">61,200</td><td class="num"></td><td class="num">9,840</td>
+      <td class="num"><b>71,040</b></td><td class="num">70,000</td><td class="num">64,100</td>
+      <td class="num">1,040</td></tr>
+    <tr><td>6034 Electricity</td><td class="num">0</td><td class="num">25,061</td><td class="num"></td>
+      <td class="num"><b>25,061</b></td><td class="num">24,000</td><td class="num">23,800</td><td class="num"></td></tr>
+    <tr><td>4005 Catering revenue</td><td class="num">180,400</td><td class="num"></td><td class="num">6,200</td>
+      <td class="num"><b>186,600</b></td><td class="num"></td><td class="num"></td><td class="num"></td></tr>
+    <tr class="total"><td>Gross profit / Net profit</td><td class="num">…</td><td class="num">…</td>
+      <td class="num">…</td><td class="num">…</td><td class="num"></td><td class="num"></td><td class="num"></td></tr>
+  </table>
+  <ul>
+    <li>Drilling into a figure (<span class="mono">why 6345</span>) lists the Xero lines and the overlay journals
+      behind it.</li>
+    <li>The balance sheet uses the same layer, so <span class="mono">/reconcile</span> sees the landing balance too.
+      Example: once "reverse the three unreleased annual leave accruals (16,728.17) to 2310" is in the layer, the 2000
+      reconciliation shows 2000 landing clean.</li>
+  </ul>
+</section>
+
+<section id="cycle">
+  <h2><span class="n">4</span>The cycle: refresh → review → act → view, until the month is locked</h2>
+  <div class="cycle">
+    <div class="step"><span class="k">1</span><b>Refresh</b><span class="cmd">automatic / reread</span>
+      <p>Copy Xero (incremental). Overlay journals now found in Xero leave the buckets.</p></div>
+    <div class="step"><span class="k">2</span><b>Review</b><span class="cmd">/review</span>
+      <p>iLA + human review of the P&amp;L: the core checks plus your review requests from admin.</p></div>
+    <div class="step"><span class="k">3</span><b>Act</b><span class="cmd">/accrue · /tag · /reclass · /reconcile · /adj</span>
+      <p>Actions put overlay journals into Expected (or straight into To post).</p></div>
+    <div class="step"><span class="k">4</span><b>View &amp; approve</b><span class="cmd">/status · /pl --landing</span>
+      <p>See the new landing; approve Expected → To post; build, import and stamp what's to post.</p></div>
+  </div>
+  <div class="loop">↺ once posted journals are in Xero, the next refresh starts the next cycle</div>
+  <div class="lock"><b>Lock the month</b> — a snapshot of Xero's TB, the layer, the decisions, who locked it and when.
+    Anything still in Expected is archived: you can view it, but it has no bearing anywhere in the console.
+  </div>
+  <h3>Lock</h3>
+  <p>Locking needs:</p>
+  <ul>
+    <li>every finding in <span class="mono">/review</span> reviewed (core checks and review requests)</li>
+    <li>every account reconciled and signed</li>
+    <li>the To post bucket empty (all found in Xero), or deliberately carried to next month</li>
+  </ul>
+  <p>If Xero changes for a locked month later, iLA flags it, with the amount.</p>
+</section>
+
+<section id="review">
+  <h2><span class="n">5</span><span class="mono">/review</span>: core P&amp;L checks + your review requests</h2>
+  <p class="lead">For now <span class="mono">/review</span> covers the <b>P&amp;L</b>; the balance sheet comes later
+    on the same design. Most businesses review the P&amp;L the same way every month, so iLA does that part by default.
+    What's particular to the business (its ad-hoc events, its own worries) you tell iLA as <b>review requests</b>.</p>
+  <div class="flow">
+    <div class="box xero"><b>Core P&amp;L checks</b><span>on by default, each can be switched off</span></div>
+    <div class="arrow">+</div>
+    <div class="box expect"><b>Review requests</b><span>RR-01, RR-02 … added in admin</span></div>
+    <div class="arrow">=</div>
+    <div class="box land"><b>/review</b><span>one numbered list of findings</span></div>
+  </div>
+
+  <h3>Part A · Core P&amp;L checks (on by default)</h3>
+  <p>All on the landing figures (Xero + the layer), for the <b>most recent full month</b> unless you give a period.</p>
+  <table>
+    <tr><th>#</th><th>Check</th><th>Compared with</th><th>Shown as</th></tr>
+    <tr><td>C1</td><td>Month: every P&amp;L line and subtotal</td><td>Last month</td><td>$ and %</td></tr>
+    <tr><td>C2</td><td>Month: every P&amp;L line and subtotal</td><td>Same month last year</td><td>$ and %</td></tr>
+    <tr><td>C3</td><td>Month: every P&amp;L line and subtotal</td><td>Budget</td><td>$ and %</td></tr>
+    <tr><td>C4</td><td>Year to date: every line and subtotal</td><td>YTD budget</td><td>$ and %</td></tr>
+    <tr><td>C5</td><td>COGS % of revenue</td><td>Last month, last year, budget</td><td>points</td></tr>
+    <tr><td>C6</td><td>Labour % of revenue</td><td>Last month, last year, budget</td><td>points</td></tr>
+    <tr><td>C7</td><td>EBITDA % of revenue</td><td>Last month, last year, budget</td><td>points</td></tr>
+    <tr><td>C8</td><td>Net profit % of revenue</td><td>Last month, last year, budget</td><td>points</td></tr>
+  </table>
+  <ul>
+    <li>Each check has an on/off switch and a <b>materiality you set</b>. The default is <b>any movement over $1,000,
+      either way</b>. For each check you can change it to an amount ($), a percentage (%), points (for the ratios), or
+      a combination (e.g. "over $1,000 <i>and</i> over 5%", or "over $5,000 <i>or</i> over 10%"). Below materiality nothing
+      is raised, which keeps the list short.</li>
+    <li>With no period, <span class="mono">/review</span> looks at the last full month.</li>
+    <li>EBITDA = net profit + interest + tax + depreciation and amortisation. Which accounts count as COGS, labour,
+      interest, tax, depreciation and amortisation is taken from Xero's account types and can be changed in admin.
+      TECC: labour = 6300–6380.</li>
+    <li>iLA doesn't just list the variances. It explains each one from what it can see: the bill or journal behind it,
+      the overlay journals in the layer, events held this month against last year, and your notes on the same line in
+      earlier months (<i>"Oct is always high: PBR"</i>).</li>
+    <li>Ad-hoc events you tell iLA once, as a note on the month or on a review request (<i>"one-off legal fee
+      in Oct, 12k"</i>). iLA then treats that variance as explained, this month and when Oct is "last year" next year.</li>
+  </ul>
+
+  <h3>Part B · Review requests, set up in admin</h3>
+  <p>Admin › Review › Review requests. Each request starts as a blank canvas: you write what you want iLA to look at,
+    in your own words.</p>
+  <table>
+    <tr><th style="width:22%">Field</th><th>Example</th></tr>
+    <tr><td>Number</td><td><span class="mono">RR-01</span> (never changes)</td></tr>
+    <tr><td>Request (your prompt)</td><td><i>"iLA, please look at any revenue unassigned to any events."</i></td></tr>
+    <tr><td>Trial-run months</td><td>1 or 2 (preset per organisation; default 2)</td></tr>
+    <tr><td>The check iLA worked out</td><td>Shown in plain English (<i>"Every revenue line in the month with no Event
+      (iLA tag or Xero tracking), largest first, with iLA's suggested event"</i>), and as the saved check underneath,
+      read-only</td></tr>
+    <tr><td>Trial result</td><td>The table from the last trial run, exactly as it will appear in
+      <span class="mono">/review</span></td></tr>
+    <tr><td>Status</td><td>Draft → Trial run → <b>Confirmed</b> (runs in /review) · Off. Only an admin can confirm.</td></tr>
+    <tr><td>History</td><td>Every version of the prompt and the check, who confirmed it and when</td></tr>
+  </table>
+
+  <h3>How a request becomes a check</h3>
+  <div class="cycle">
+    <div class="step"><span class="k">1</span><b>Write</b><span class="cmd">admin</span>
+      <p>Type the request in plain English.</p></div>
+    <div class="step"><span class="k">2</span><b>Trial run</b><span class="cmd">button</span>
+      <p>iLA turns the request into a saved check and runs it on the last 1–2 months. The result shows on the admin
+        page.</p></div>
+    <div class="step"><span class="k">3</span><b>Adjust</b><span class="cmd">edit the prompt</span>
+      <p>Not quite right? Reword it ("only over $500", "group by customer") and trial run again.</p></div>
+    <div class="step"><span class="k">4</span><b>Confirm &amp; save</b><span class="cmd">button</span>
+      <p>An admin confirms. The check is frozen and every <span class="mono">/review</span> runs it from now on.</p></div>
+  </div>
+  <ul>
+    <li><b>The check is saved, not re-interpreted each time.</b> The LLM is used once, at the trial run, to turn the
+      prompt into a check made from iLA's own building blocks: which lines (accounts, account types, contacts,
+      dimensions, references), which months, what to compare, what condition makes it a finding, and which columns to
+      show. After that, code runs the saved check, so every <span class="mono">/review</span> gives the same kind of
+      answer, quickly and without cost.</li>
+    <li><b>If iLA can't do it, it says so</b> at the trial run instead of guessing: <i>"I can't see rosters, so I
+      can't check hours; I can check labour cost per event."</i></li>
+    <li>Change the prompt any time: it goes back to Trial run, and the confirmed version keeps running until you
+      confirm the new one. Delete or switch it off any time.</li>
+    <li>A request can carry its own materiality and an action: e.g. RR-01's findings open
+      <span class="mono">/tag</span>.</li>
+  </ul>
+
+  <h3>Example: RR-01 trial run (Sep–Oct 2026)</h3>
+  <table>
+    <tr><th>Month</th><th>Date</th><th>Customer</th><th>Ref</th><th>Account</th><th class="num">Amount</th>
+      <th>iLA's suggested event</th></tr>
+    <tr><td>Oct</td><td>14 Oct</td><td>ADF</td><td>INV-2231</td><td>4005 Catering</td><td class="num">8,420.00</td>
+      <td>ADF Expo (date and customer)</td></tr>
+    <tr><td>Oct</td><td>22 Oct</td><td>Cash sales</td><td>Bepoz 22/10</td><td>4010 Beverage</td>
+      <td class="num">3,115.50</td><td>PBR Finals (same day)</td></tr>
+    <tr><td>Sep</td><td>…</td><td></td><td></td><td></td><td class="num"></td><td></td></tr>
+    <tr class="total"><td colspan="5">Unassigned revenue · Oct 9 lines · Sep 6 lines</td>
+      <td class="num">14,860.20</td><td></td></tr>
+  </table>
+  <p class="note">Illustrative figures. TECC's other first requests could be: <i>"event recovery: recharged wages,
+    cleaning, first aid and security against what they cost, by event"</i> (what was the built-in Event recovery %
+    check in version 2), and <i>"any supplier billed this month that wasn't billed last month, over $1,000"</i>.</p>
+
+  <h3>What <span class="mono">/review --Oct 2026</span> shows</h3>
+  <p>The core checks first, then each confirmed review request in the layout from its trial run, all numbered as one
+    list of findings:</p>
+  <table>
+    <tr><th>#</th><th>From</th><th>Finding</th><th class="num">Oct</th><th class="num">Compared</th>
+      <th>iLA's reading</th><th>Status</th></tr>
+    <tr><td>1</td><td>C3 Budget</td><td>6345 Event staff</td><td class="num">71,040</td><td class="num">70,000</td>
+      <td>In line (within materiality after ADJ-0142)</td><td class="ok">Explained</td></tr>
+    <tr><td>2</td><td>C2 Last year</td><td>4005 Catering</td><td class="num">186,600</td><td class="num">152,300</td>
+      <td>+34,300: ADF Expo is new this year (8,420 of it untagged, see 6)</td><td>To review</td></tr>
+    <tr><td>3</td><td>C5 COGS %</td><td>Beverage</td><td class="num">34.6%</td><td class="num">30.1% LY</td>
+      <td>October's Bepoz stock journal isn't in Xero yet (usually by the 6th)</td><td class="warn">Needs action</td></tr>
+    <tr><td>4</td><td>C6 Labour %</td><td>Labour</td><td class="num">31.8%</td><td class="num">29.0% budget</td>
+      <td>Three high-labour events; per event in line with Oct 2025</td><td>To review</td></tr>
+    <tr><td>5</td><td>C8 Net profit %</td><td>Net profit</td><td class="num">8.2%</td><td class="num">10.5% budget</td>
+      <td>Mostly 3 and 4</td><td>To review</td></tr>
+    <tr><td>6</td><td>RR-01</td><td>Revenue not assigned to an event</td><td class="num">11,535.50</td>
+      <td class="num">2 lines</td><td>Both have a likely event</td><td class="warn">Needs action</td></tr>
+  </table>
+
+  <h3>Working the review</h3>
+  <pre>why 3                 the figures, what it's compared with and the evidence behind iLA's reading
+note 4 &lt;text&gt;         add what iLA can't know ("PBR needed extra security staff")
+ok 1                  reviewed: no action needed
+act 6                 open the action that fixes it (here /tag)
+later 2               not yet: stays open</pre>
+  <p>A finding is <b>reviewed</b> once it's OK'd, noted or acted on. Your notes are kept, are reused when the same
+    thing comes up again, and become the commentary in the management pack. The pack shows the landing view by
+    default (Xero now + To post + Expected); admin can change it per organisation, e.g. to Xero now + To post.</p>
+</section>
+
+<section id="actions">
+  <h2><span class="n">6</span>Actions: what puts overlay journals into the buckets</h2>
+  <table>
+    <tr><th style="width:24%">Action</th><th>What it does</th><th style="width:20%">Lands in</th></tr>
+    <tr><td><span class="mono">/accrue</span></td><td>Month-end accruals: bills after month end, recurring
+      estimates, payroll (section 9). The review you already use.</td><td>Expected (iLA's)</td></tr>
+    <tr><td><span class="mono">/tag</span></td><td>Tags costs and revenue to events (iLA dimensions; Xero is not
+      changed). Moves amounts between events in <span class="mono">/pl --event</span>, not the totals.</td>
+      <td>The event view</td></tr>
+    <tr><td><span class="mono">/reclass</span></td><td>Moves amounts between accounts (e.g. COGS 5000 into 5010 Food /
+      5020 Beverage), by rule or one-off. Builds on the parked <span class="mono">/split</span> design.</td>
+      <td>Expected</td></tr>
+    <tr><td><span class="mono">/reconcile</span></td><td>Reconciling items that need a journal: "reverse the
+      accrual that was billed", "reclass annual leave to 2310".</td><td>Expected</td></tr>
+    <tr><td><span class="mono">/adj</span></td><td>Any journal typed or drafted from plain English: <i>"accrue 6 days
+      of event staff at last fortnight's rate"</i>. iLA shows the lines and waits for your OK.</td>
+      <td>To post (yours), or Expected with <span class="mono">expect</span></td></tr>
+  </table>
+</section>
+
+<section id="status">
+  <h2><span class="n">7</span><span class="mono">/status</span>: the cockpit</h2>
+  <p><span class="mono">/status --Oct 2026</span> (or <span class="mono">/status</span> for the current month) is the one
+    place to see where the month stands and to move overlay journals through the buckets.</p>
+
+  <h3>What it shows</h3>
+  <table>
+    <tr><th style="width:24%">Block</th><th>Content</th></tr>
+    <tr><td>Headline</td><td>Revenue, GP %, labour %, net profit: Xero now → landing, against budget and last
+      year.</td></tr>
+    <tr><td><b>Cash and bank</b></td><td>Each bank account at the date: Xero balance, statement balance (from its
+      <span class="mono">/reconcile</span> working paper), difference, Xero items not yet reconciled (count, amount,
+      oldest) and the sign-off (prepared / reviewed). Shown with or without a period; today it disappears when a period
+      is given.</td></tr>
+    <tr><td>Reconciliations</td><td>Accounts reconciled, prepared, reviewed and to do; unexplained differences.</td></tr>
+    <tr><td>Review</td><td>Findings reviewed / open (core checks and review requests), and the biggest open ones.</td></tr>
+    <tr><td><b>Overlay journals</b></td><td>The Expected and To post buckets: number, description, made by (iLA or
+      who), amount, confidence, status.</td></tr>
+    <tr><td>Since your last look</td><td><i>"Xero: 23 new transactions; ADJ-0138 and ADJ-0139 found in Xero (out of To
+      post); landing GP down 3,100 (two bills higher than expected)"</i>.</td></tr>
+  </table>
+
+  <h3>Working the overlay journals from <span class="mono">/status</span></h3>
+  <pre>approve 3             Expected → To post (one person is enough)
+expect 4              To post → Expected (keep it as an estimate only)
+approve all evidenced approve every evidenced one
+adjust 5 9,000 &lt;reason&gt;
+reject 6 &lt;reason&gt;     out of the buckets; the reason can become a rule
+why 2                 its lines, evidence and how it was worked out
+post                  build the stamped import file of everything To post
+posted 3-7            stamped as posted: they leave the buckets once the refresh finds them in Xero</pre>
+</section>
+
+<section id="intelligence">
+  <h2><span class="n">8</span>Making the review intelligent</h2>
+  <p class="lead">For every check and line: <b>an expected figure, with a reason, compared against the landing</b>.
+    Code works out every amount; the LLM explains, drafts journals from plain English, and suggests where rules run
+    out.</p>
+  <div class="grid2">
+    <div class="card"><h4>1 · Coverage, not averages</h4>
+      <p>For each cost stream, which days, events or bills of the month are covered by actuals, and the gaps:</p>
+      <ul><li>labour: covered by fortnightly pay runs</li>
+        <li>utilities: covered by each bill's service period, read from the PDF</li>
+        <li>event costs: covered by each event's bills</li></ul></div>
+    <div class="card"><h4>2 · Drivers</h4>
+      <p>Event staff, security, cleaning and first aid scale with the events held; iLA has the Event dimension and the
+        recovery lines on sales invoices, so the expectation is events × the usual cost per event.</p></div>
+    <div class="card"><h4>3 · Ratios that should hold</h4>
+      <p>The core ratios (COGS %, labour %, EBITDA %, net profit %) and any in your review requests: recovery %, GP %
+        by event, super ÷ salaries, on-cost rates. A broken ratio is
+        a finding with the gap worked out and the likely cause named.</p></div>
+    <div class="card"><h4>4 · Evidence beats estimates, automatically</h4>
+      <p>When the evidence arrives (the next pay journal, the bill, the stock journal), the Expected figure is
+        replaced by the evidenced one, or the overlay journal is superseded, and the review says so.</p></div>
+    <div class="card"><h4>5 · Learning</h4>
+      <ul><li>A rejection or note with a reason becomes a rule.</li>
+        <li>Each estimate is compared with what actually arrived; that sets each stream's accuracy, and accuracy
+          decides how much attention it needs.</li></ul></div>
+    <div class="card"><h4>6 · Plain English</h4>
+      <p>From <span class="mono">/adj</span> or inside a review: iLA drafts the overlay journal, shows the lines and
+        waits for your OK.</p></div>
+  </div>
+</section>
+
+<section id="labour">
+  <h2><span class="n">9</span>Worked example: labour for October 2026</h2>
+  <p>In <span class="mono">/review</span> the core Labour % check (C6) flags it; <span class="mono">act</span> opens the
+    payroll section of <span class="mono">/accrue</span> (also <span class="mono">/labour --Oct 2026</span>).</p>
+
+  <h3>Labour input sources (set up per organisation)</h3>
+  <p>iLA is built for many businesses, not just TECC, and labour often comes from more than one place. Each
+    organisation lists its sources in admin, and the labour lens uses the best one available for each day:</p>
+  <table>
+    <tr><th style="width:28%">Source</th><th>Gives</th><th style="width:22%">TECC</th></tr>
+    <tr><td>Payroll journals in Xero</td><td>Pay runs: period covered, accounts, amounts (recognised by narration,
+      e.g. "FNE dd/mm/yyyy")</td><td>Yes (The Ville)</td></tr>
+    <tr><td>Xero Payroll pay runs</td><td>Pay runs with period, employees, earnings, super, tax</td><td>No</td></tr>
+    <tr><td>Payroll or HR system export (file upload or connection)</td><td>Pay runs, employees, leave
+      balances</td><td>Possible (UKG)</td></tr>
+    <tr><td>Roster or timesheet export</td><td>Hours worked by day, person and event: the best evidence for the stub
+      days</td><td>Possible</td></tr>
+    <tr><td>Agency or labour-hire bills</td><td>Hours and rates on supplier bills (read from the PDF)</td><td>If
+      used</td></tr>
+    <tr><td>Micropay employee breakdown (xlsx per pay run) <span class="ok">built</span></td><td>Every line by
+      employee, cost account and pay component, with the days worked (only employee code and name are kept)</td>
+      <td>Yes: the source used</td></tr>
+  </table>
+  <p>Below, TECC's example uses the payroll journals.</p>
+  <div class="changed"><b>Built 14 November 2026 (section 14).</b> TECC's labour now comes from the
+    <b>Micropay employee breakdown</b> file for each fortnightly pay run, uploaded with
+    <span class="mono">/labour &lt;&lt; file.xlsx</span>. Each file ties to Ville's FNE journal in Xero to the cent. The
+    real October figures and how these steps were built are in section 14; the tables below remain the original
+    illustration.</div>
+
+  <h3>Step 1 · Coverage by pay run</h3>
+  <table>
+    <tr><th>Pay run (FNE)</th><th>Covers</th><th>In Xero?</th><th class="num">Days in October</th></tr>
+    <tr><td>FNE 11/10</td><td>28 Sep – 11 Oct</td><td class="ok">✓</td><td class="num">11</td></tr>
+    <tr><td>FNE 25/10</td><td>12 – 25 Oct</td><td class="ok">✓</td><td class="num">14</td></tr>
+    <tr><td>FNE 08/11</td><td>26 Oct – 8 Nov</td><td>✓ posted 10 Nov, <i>or</i> not yet</td>
+      <td class="num warn">6 not covered</td></tr>
+  </table>
+
+  <h3>Step 2 · The stub, from the best evidence available</h3>
+  <ul>
+    <li><b>Evidenced:</b> if FNE 08/11 is already in Xero, 6/14 of it, split by its own lines.</li>
+    <li><b>Estimated:</b> otherwise, the daily rate of the last two pay runs × 6, adjusted for the events in those six
+      days.</li>
+    <li><b>On-costs:</b> learned ratios (super, payroll tax, Workcover), or their actual split when evidenced.</li>
+  </ul>
+
+  <h3>Step 3 · Into the buckets</h3>
+  <ul>
+    <li>If you've already posted "Salary accrual for Oct-26" in Xero, iLA shows its figure against yours and the
+      difference; nothing new goes into the buckets.</li>
+    <li>If not, <span class="mono">ADJ-0142</span> (Dr labour accounts, Cr 2000, reversing 1 Nov) goes into
+      <b>Expected</b> as iLA's, evidenced or estimated. In <span class="mono">/status</span> you
+      <span class="mono">approve 142</span> to move it to To post, or leave it as Expected for the view.</li>
+  </ul>
+
+  <h3>Step 4 · The checks around it (in /review: C6 plus a labour review request)</h3>
+  <table>
+    <tr><th>Check</th><th class="num">October</th><th class="num">Normal</th><th>Finding</th></tr>
+    <tr><td>Labour % of revenue (landing)</td><td class="num">31.8%</td><td class="num">28–30%</td>
+      <td class="warn">⚠ above range: 3 events with high labour</td></tr>
+    <tr><td>Event staff per event</td><td class="num">4,120</td><td class="num">3,600 ± 400</td>
+      <td class="warn">⚠ the PBR events again (as in Oct 2025)</td></tr>
+    <tr><td>Wages recovered ÷ event staff</td><td class="num">62%</td><td class="num">70%</td>
+      <td class="warn">⚠ the ADF recovery isn't invoiced yet?</td></tr>
+    <tr><td>Super ÷ salaries</td><td class="num">11.9%</td><td class="num">12.0%</td><td class="ok">✓</td></tr>
+    <tr><td>Leave accruals in 2000</td><td class="num">16,728.17 open</td><td class="num">nil</td>
+      <td class="warn">⚠ reclass to 2310: <span class="mono">ADJ-0143</span> into Expected</td></tr>
+    <tr><td>Bonus</td><td class="num">Q4 accrued Jun, reversed Jul</td><td class="num">quarterly</td>
+      <td class="ok">✓ next accrual due Dec</td></tr>
+  </table>
+  <p class="note">Figures in this example are illustrative of the layout; the real ones come from TECC's data once
+    built.</p>
+</section>
+
+<section id="fit">
+  <h2><span class="n">10</span>How this fits what iLA already has</h2>
+  <table>
+    <tr><th style="width:30%">Already built</th><th>Becomes</th></tr>
+    <tr><td>Expectation Ledger accrual journals, <span class="mono">/accrue</span> decisions</td>
+      <td>The first action producing overlay journals into Expected.</td></tr>
+    <tr><td>Open-item reconciliation reconciling items</td><td>Overlay journals into Expected.</td></tr>
+    <tr><td><span class="mono">/tag</span>, <span class="mono">/splittag</span>, <span class="mono">/pl --event</span></td>
+      <td>Actions on the event view.</td></tr>
+    <tr><td>Import file and stamping</td><td>How To post reaches Xero (<span class="mono">post</span>,
+      <span class="mono">posted</span>).</td></tr>
+    <tr><td>The reversal linker</td><td>Finds posted overlay journals in Xero, and superseded ones.</td></tr>
+    <tr><td><span class="mono">/status</span>, <span class="mono">/reconcile --bank</span></td>
+      <td>The cockpit, with the bank reconciliation status brought in.</td></tr>
+  </table>
+</section>
+
+<section id="build">
+  <h2><span class="n">11</span>Build order (once the design is approved)</h2>
+  <ol>
+    <li><span class="ok">✓ Done 8 Nov (PRs #20–#22).</span> <span class="mono">/review</span> on the P&amp;L: the core checks C1–C8, each with on/off and its materiality
+      in admin; then review requests (prompt → trial run → admin confirms, saved check, history); notes and review
+      status.</li>
+    <li><span class="ok">✓ Done 14 Nov (PRs #23–#29).</span> Labour: input sources per organisation, pay-run coverage,
+      stub accrual, on-cost ratios, driver checks. Built as: event dates, the labour ledger, the Labour view, the
+      pay-run journal as the first overlay journals (ADJ), <span class="mono">/labour --&lt;month&gt;</span> and
+      <span class="mono">/splittag --labour</span> (section 14). Driver checks (labour % etc.) come from
+      <span class="mono">/review</span>'s ratios for now.</li>
+    <li><span class="mono">/accrue</span> and <span class="mono">/reconcile</span> producing overlay journals; refresh
+      finding posted ones in Xero.</li>
+    <li><span class="mono">/reclass</span> and <span class="mono">/adj</span> (plain English); superseded detection,
+      accuracy tracking, and the lock with its snapshot (Expected archived).</li>
+    <li>The two buckets worked from the console; <span class="mono">--landing</span> on <span class="mono">/pl</span>,
+      <span class="mono">/bs</span>, <span class="mono">/tb</span>; <span class="mono">/status</span> as the cockpit
+      (cash and bank reconciliation status with or without a period; approve, expect, adjust, reject, post,
+      posted).</li>
+  </ol>
+  <p class="note">With this order: until step 5, <span class="mono">/review</span> works on Xero now plus whatever is
+    already in the layer, and the overlay journal itself (number, lines, bucket) is created as a simple record in
+    step 2, when labour first needs somewhere to put its estimate. Steps 2–4 show their journals in their own working
+    papers and in admin; step 5 brings them together in <span class="mono">/status</span> and the landing columns.</p>
+</section>
+
+<section id="questions">
+  <h2><span class="n">12</span>Decisions</h2>
+  <table>
+    <tr><th style="width:22%">Question</th><th>Decided (7 Nov 2026)</th></tr>
+    <tr><td>1 · The landing</td><td>The landing includes both buckets as two columns: To post and Expected. <b>To post</b>
+      = agreed or started by a person. <b>Expected</b> = iLA's estimates, until a person approves them.</td></tr>
+    <tr><td>2 · Core checks</td><td>Users set the materiality. The default is any movement over <b>$1,000 either way</b>;
+      each core check can be changed to an amount, a %, points, or a combination. EBITDA = net profit + interest + tax
+      + depreciation and amortisation, accounts from Xero's account types, editable in admin. No period = the last
+      full month.</td></tr>
+    <tr><td>3 · Labour data</td><td>Flexible: each organisation sets up its own input sources (payroll journals, Xero
+      Payroll, payroll/HR exports, rosters/timesheets, agency bills). Many businesses have several.</td></tr>
+    <tr><td>4 · Management pack</td><td>The landing view by default; changeable per organisation in admin.</td></tr>
+    <tr><td>5 · Approval</td><td>One person approves Expected → To post.</td></tr>
+    <tr><td>6 · Expected at lock</td><td>Archived: can be viewed, but has no bearing anywhere in the console.</td></tr>
+    <tr><td>7 · Review requests</td><td>Only admins confirm them. Trial run preset to 2 months (changeable).</td></tr>
+  </table>
+</section>
+
+<section id="progress">
+  <h2><span class="n">13</span>Progress note: weekend of 7–8 November 2026</h2>
+  <div class="changed"><b>Step 1 (<span class="mono">/review</span>) is done.</b> PRs #20, #21 and #22 are merged into
+    main; 364 tests pass. Step 2 (labour) is next.</div>
+
+  <h3>What was built</h3>
+  <table>
+    <tr><th style="width:22%">When</th><th>What</th></tr>
+    <tr><td>Saturday 7 Nov</td><td>Design v4 agreed and written to <span class="mono">docs/Month-end Review — Design.md</span>.
+      First <span class="mono">/review</span> built (PR #20).</td></tr>
+    <tr><td>Sunday 8 Nov</td><td><span class="mono">/review</span> rebuilt after the first test (PR #21):
+      <ul>
+        <li>The default view (L0) is one P&amp;L table by group with its ratios, against last month, the same month
+          last year or budget (<span class="mono">--vs lm|ly|budget</span>), MTD or YTD
+          (<span class="mono">--mtd|--ytd</span>).</li>
+        <li><span class="mono">--L1 --rev</span> (or any group) shows that group's GL accounts; GL is the deepest
+          level.</li>
+        <li>No narrative, no favourable/unfavourable wording, no materiality filter (for now).</li>
+        <li>Notes, sign-off and reopen by account code, range, group or RR-01, one review point per month whatever the
+          comparison. Signed-off rows turn <span class="ok">green</span>; they turn <span class="warn">amber</span> if
+          the figure changes after sign-off.</li>
+        <li><span class="mono">/status</span> shows where the month's review stands. RR-01 is unchanged.</li>
+      </ul></td></tr>
+    <tr><td>Sunday 8 Nov, later</td><td>Ratios became your own formulas in Admin › Review › Review settings (PR #22),
+      e.g. COGS % = <span class="mono">5110-5330 / 4005 + 4810 + 4830</span>. The defaults (gross profit, COGS,
+      labour, EBITDA and net profit % of revenue) apply until you edit them.</td></tr>
+  </table>
+
+  <h3>Two settings to make on ila.works for TECC (Review settings)</h3>
+  <ul>
+    <li>Set the <b>Labour</b> group to <span class="mono">6300-6380</span>. Matching by account name also picks up
+      6096, 6098 and 6760.</li>
+    <li>Enter your <b>COGS %</b> formula.</li>
+  </ul>
+
+  <h3>Next: step 2, labour (design agreed before any code)</h3>
+  <ol>
+    <li><b>Where the labour data comes from, for each business:</b> payroll journals (TECC's fortnightly Ville "FNE"
+      journals), Xero Payroll, HR exports, rosters or agency bills.</li>
+    <li><b>Pay-run coverage:</b> which days of the month each pay run covers, and the gap after the last pay run.</li>
+    <li><b>Accruing that gap:</b> from the next pay run if it's already in, otherwise from the run-rate adjusted for
+      events. iLA would also compare this with any accrual already in Xero.</li>
+    <li><b>On-cost ratios:</b> super, payroll tax and so on, learned from past months and editable in Review settings
+      like the <span class="mono">/review</span> ratios.</li>
+    <li><b>The adjustment record:</b> the first version of the suggested journals iLA keeps for each month without
+      posting them to Xero (ADJ-0001 and so on).</li>
+  </ol>
+  <div class="q"><b>To bring:</b> does TECC have anything beyond the Ville journals, such as UKG rosters or
+    timesheets?</div>
+
+  <h3>Also outstanding</h3>
+  <ul>
+    <li>How To notes and unit tests for the open-item reconciliation.</li>
+    <li>Plain-English <span class="mono">/tag</span> corrections (parked).</li>
+    <li><span class="mono">docs/Scrap paper.txt</span> holds the Xero client secret in plain text: delete it.</li>
+  </ul>
+</section>
+
+<section id="progress-labour">
+  <h2><span class="n">14</span>Progress note: 14 November 2026, labour (build step 2)</h2>
+  <div class="changed"><b>Step 2 (labour) is done.</b> PRs #23 to #29 are merged into main; 399 tests pass. A small
+    <span class="mono">/pl</span> fix is pushed on branch <span class="mono">pl-period</span>, waiting for its PR. The
+    full labour design is in <span class="mono">docs/Labour — Design.md</span>; how to use it is in
+    <span class="mono">docs/How To.md</span> (Labour).</div>
+
+  <h3>What was built</h3>
+  <table>
+    <tr><th style="width:14%">PR</th><th>What</th></tr>
+    <tr><td>#23</td><td><b>Event dates.</b> Each event has its own Start, End, Bump-in days, Bump-out days and Season
+      (defaults: 2 bump days each side; a season is longer than 7 days). Admin → Dimension values page with
+      <i>Suggest dates</i> from event codes and sales invoices; <span class="mono">/createTag</span> and
+      <span class="mono">/dim</span> date columns. Fixes the Event page in admin failing with Bad Request (400).
+      Approving <span class="mono">/createTag</span> tags lines already copied with that Xero code.</td></tr>
+    <tr><td>#24</td><td><b>The labour ledger.</b> <span class="mono">/labour &lt;&lt; file.xlsx</span> (or Admin →
+      Labour → Upload) reads a Micropay employee breakdown: pay runs, pay lines with their days worked, employees
+      (code and name only). Checked against the file's Summary total and against the FNE journal in Xero, GL by GL.
+      On-cost rates (payroll tax, workcover) learned from Xero.</td></tr>
+    <tr><td>#25, #26</td><td><b>Mappings, as CSV upload and download.</b> Cost accounts set the department and whether
+      the cost can go to an event; pay components (Micropay's Pay Comp code) set the GL account. TECC: Super 6370,
+      Sick 6355, NAUS and TOOL 6312, everything else 6345; Fixed Wages and Event Sales can't go to an event; Cleaner
+      goes to Overhead &amp; Venue Costs.</td></tr>
+    <tr><td>#27</td><td><b>Labour view and the pay-run journal.</b> Admin → Labour → Labour view: by employee, by day,
+      by event and Journal. Each day's cost goes to an event by rule: your change for the employee → your change for
+      the whole day → event day → bump day → season → no event (Unassigned); several events on one day split equally;
+      super follows the wages day by day; on-costs follow the pay. <b>Overlay journals (ADJ-nnnn)</b> now exist (Admin
+      → Core → Overlay journals): Expected, To post, Posted, Superseded, Rejected. Each pay run becomes one Xero
+      manual journal per month it covers, by account × department × event with on-costs, credited to 2350, rounded
+      to tie; kept as Expected and marked Superseded (with the difference by account and department) once the
+      accountant's FNE journal is in Xero. <i>Download import file</i> once the checks pass.</td></tr>
+    <tr><td>#28</td><td>By event: click the number of employees to see each employee's days, wages, super, on-costs
+      and why, adding up to the event's row.</td></tr>
+    <tr><td>#29</td><td><b><span class="mono">/labour --Oct 2026</span></b>: the month's labour from the pay runs plus
+      an <b>estimate</b> for days no pay run covers yet (from the last two pay runs' cost per day with and without an
+      event; an Expected ADJ, replaced when the pay run arrives), against Xero, then by account, department, event
+      and pay run. <b><span class="mono">/splittag --labour --Oct 2026</span></b>: the variance first, then
+      <span class="mono">approve</span> tags the month's labour accounts in Xero by each event's share; Unassigned
+      stays untagged. "labour" is no longer a name for your own split rules (the old one runs with
+      <span class="mono">--rule labour</span>).</td></tr>
+    <tr><td>branch pl-period</td><td><span class="mono">/pl Oct 26 --by event</span> works without dashes; text it
+      can't read (e.g. <span class="mono">/pl oc 26</span>) is now an error instead of quietly showing this month to
+      date.</td></tr>
+  </table>
+
+  <h3>Decisions made along the way (14 Nov)</h3>
+  <table>
+    <tr><th style="width:26%">Question</th><th>Decided</th></tr>
+    <tr><td>Multi-day pay lines</td><td>Spread evenly over their days; super and on-costs follow the wages.</td></tr>
+    <tr><td>Where the GL comes from</td><td>The pay component, not the cost account (your correction).</td></tr>
+    <tr><td>Which labour goes to events</td><td>By cost account: Fixed Wages and Event Sales always Unassigned.</td></tr>
+    <tr><td>Event, bump, season</td><td>Event day beats bump day beats season; ±2 bump days, editable per event.</td></tr>
+    <tr><td>Departments</td><td>Food and Beverage Services, Overhead &amp; Venue Costs, Event Hire &amp; Service
+      Recoveries; on-costs follow the pay's department and events.</td></tr>
+    <tr><td>Who posts</td><td>The accountant posts the payroll journal today, so iLA's is Expected and gets superseded.
+      Later iLA's file replaces it, approved and imported by the accountant. iLA never posts to Xero.</td></tr>
+    <tr><td>Pay run across two months</td><td>Two journals in one file: last day of the month, and the pay-run end
+      date.</td></tr>
+    <tr><td>Tagging labour</td><td>Review the variance first, then pro-rate all the month's labour in Xero by the event
+      shares; Unassigned stays untagged; no automatic threshold.</td></tr>
+    <tr><td>Personal data</td><td>Only employee code, name and employment type; the payroll files stay out of git.</td></tr>
+  </table>
+
+  <h3>TECC, October 2026 (iLA's local copy)</h3>
+  <table>
+    <tr><th>Figure</th><th class="num">$</th></tr>
+    <tr><td>Pay runs FNE 4/10, 18/10 and 1/11 each tie to their FNE journal (1/11 to TECC's own output file)</td>
+      <td class="num"></td></tr>
+    <tr><td>October labour per pay runs, with payroll tax 4.95% and workcover 1.711%</td><td class="num">126,560.10</td></tr>
+    <tr><td>&nbsp;&nbsp;to events: 261030DYN 37,618 · 261017TOW 22,563 · 261025FIR 15,808 · 261010BJO 7,888 ·
+      261020ADF 7,551 · 261008MEL 514</td><td class="num">91,942.29</td></tr>
+    <tr><td>&nbsp;&nbsp;Unassigned: not taggable 24,714 · no event 9,904</td><td class="num">34,617.81</td></tr>
+    <tr><td>FNE 1/11 journals: ADJ 31/10 63,339.55 + ADJ 1/11 16,232.82</td><td class="num">79,572.37</td></tr>
+    <tr><td>Labour in Xero before the latest refresh (6312–6380); the difference is mostly FNE 1/11 not yet posted
+      (63,339.55) and the September over-accrual (about 7,359)</td><td class="num">52,699.64</td></tr>
+    <tr><td><span class="mono">/splittag --labour</span> preview: share of Xero's October labour going to events</td>
+      <td class="num">72.7%</td></tr>
+  </table>
+  <p class="note">The latest refresh shows 6345 for October at 110,422.64, so FNE 1/11 or an accrual has since been
+    posted in Xero. Revenue by event is 88.9% tagged in <span class="mono">/pl --Oct 2026 --by event</span>; labour
+    shows by event once <span class="mono">/splittag --labour --Oct 2026</span> is approved.</p>
+
+  <h3>To do on ila.works for TECC</h3>
+  <ul>
+    <li>Review settings → <b>Labour accounts</b> = <span class="mono">6300-6380</span>.</li>
+    <li>Labour settings → <b>Narration</b> = <span class="mono">Ville for TECC Payroll Journal FNE: {period_end}</span>.</li>
+    <li>Cost accounts and pay components set up (<span class="mono">docs/cost-accounts.csv</span>, then
+      <span class="mono">docs/pay-components.csv</span>), if not done yet.</li>
+    <li>Fire games: the duplicate 261025FIR was deleted (2627FIRE, the Xero option, kept). The other game values
+      (261103FIR … 261231FIR) exist only in iLA, so their days can't go into an import file. If game-day detail is
+      wanted, link each game to the Xero option 2627FIRE (needs a small change to how Xero tracking maps back to iLA
+      values).</li>
+    <li>Then: <span class="mono">/labour --Oct 2026</span> → <span class="mono">/splittag --labour --Oct 2026</span> →
+      <span class="mono">approve</span> → <span class="mono">/pl --Oct 2026 --by event</span>.</li>
+  </ul>
+
+  <h3>Next</h3>
+  <ol>
+    <li><b>Approving overlay journals</b> (Expected → To post → stamped file → posted) from
+      <span class="mono">/status</span>: build step 5, together with the landing columns.</li>
+    <li><b>Build step 3:</b> <span class="mono">/accrue</span> and <span class="mono">/reconcile</span> producing
+      overlay journals; the labour estimate and pay-run journals feeding <span class="mono">/review</span>'s labour
+      line.</li>
+    <li>A drill-down <span class="mono">L1 &lt;department&gt;</span> in <span class="mono">/labour</span> (employees),
+      if the Labour view isn't enough.</li>
+  </ol>
+
+  <h3>Still outstanding</h3>
+  <ul>
+    <li>How To notes and unit tests for the open-item reconciliation.</li>
+    <li>Plain-English <span class="mono">/tag</span> corrections (parked).</li>
+    <li><span class="mono">docs/Scrap paper.txt</span> holds the Xero client secret in plain text: delete it.</li>
+  </ul>
+</section>
+
+</main>
+
+<footer>iLA design document · the month-end review cycle · version 4, 7 November 2026; progress notes added 8 and 14 November 2026. iLA never posts to Xero itself:
+  approved overlay journals go into a stamped import file that a person imports.</footer>
+
+</body>
+</html>
