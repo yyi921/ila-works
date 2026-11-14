@@ -75,8 +75,10 @@ Quarters and financial years follow the year end set in Xero.
 | See revenue for a month against budget and last year | `/status --September 2026 --revenue --mtd` |
 | Prepare a P&L for the month-end pack | `/pl --last month >> pl.xlsx` |
 | See profit by event | `/pl --event --Sep 2026` (or `/pl --by event`) |
-| Share September's labour (6300-6380) across events | `/splittag --Sep 2026 << labour.csv`, then `approve` |
-| Do the same split again next month | `/splittag --labour --Oct 2026` |
+| Share a month's labour across events by its pay runs | `/splittag --labour --Oct 2026`, then `approve` |
+| Review a month's labour against Xero | `/labour --Oct 2026` |
+| Split amounts across events by your own rules | `/splittag --Sep 2026 << rules.csv`, then `approve` |
+| Do the same split again next month | `/splittag --wages --Oct 2026` (your rule's name) |
 | Get a balance sheet at year end | `/bs --as at 30/06/2026` |
 | Get a trial balance for the audit file | `/tb --as at 30/06/2026 >> tb.xlsx` |
 | Check bank balances before a payment run | `/cash` |
@@ -298,7 +300,29 @@ Quarters and financial years follow the year end set in Xero.
     with days in October.
   - After the upload iLA builds the pay run's **journal** and names it (e.g. *ADJ-0004 31/10/2026 63,339.55,
     ADJ-0005 01/11/2026 16,232.82 (Expected)*), with anything that stops its import file: see *Journal* below.
-  - Coming next: labour by event in the P&L (`/splittag --labour`).
+  - `/labour --Oct 2026` reviews the month (below); `/splittag --labour --Oct 2026` shares it out by event.
+
+#### `/labour --<month>` — review a month's labour
+- **What it shows** (figures only):
+
+  | Line | |
+  | --- | --- |
+  | Labour per pay runs (October days) | the month's part of every pay run's journal, with on-costs |
+  | Estimate, no pay run yet (e.g. 2/11–30/11) | days after the last pay run (see below) |
+  | Labour for the month | the two together |
+  | In Xero now | the month's lines on the labour accounts: journals, bills and bank |
+  | Difference | of which: each pay run not in Xero yet, the estimate, and other (accruals, reversals, timing, mapping) |
+
+  Then **by account** (pay-run journals against Xero), **by department**, **by event** (with shares) and **by pay
+  run** (its days in the month, in Xero or not). The link opens the Labour view for employees and days.
+- **Labour accounts:** Review settings → Labour accounts (TECC: set it to `6300-6380`). Blank: the accounts the
+  pay-run journals post to (pay components' GL accounts and the on-costs).
+- **Estimate for days with no pay run yet:** from the last two pay runs, iLA works out the cost per day on days with
+  an event (event or bump day) and on days without, and applies them to the missing days by the event calendar. It's
+  kept as an overlay journal (ADJ, **Expected**) dated the month end, by account and department, credited to the
+  clearing account, and rebuilt each time you look. When the pay run for those days is uploaded, the estimate is
+  marked **Superseded** and the pay run's journal takes its place. No estimate when the last pay run ended more than a
+  month before.
 
 #### Labour view (Admin → Labour → Labour view) — labour by employee, day and event
 - **Purpose:** see where each month's labour goes, why, and change it. It's the base for the pay-run journal and for
@@ -513,7 +537,7 @@ Quarters and financial years follow the year end set in Xero.
 - **Purpose:** share out the amounts on chosen GL accounts across events (or any dimension), e.g. September's
   labour on 6300-6380, by fixed amounts, percentages or both. It's tagging, so **Xero isn't changed**. (Moving
   amounts between GL accounts, a reclassification, will be a separate `/split` command that builds a journal file.)
-- **Syntax:** `/splittag [<< rules.csv] [--<rule name>] [--<period>] [--gl <accounts>] [--journals ...] [--template]`
+- **Syntax:** `/splittag [<< rules.csv] [--<rule name>|--labour] [--<period>] [--gl <accounts>] [--journals ...] [--template]`
 - **Steps:**
   1. `/splittag --Sep 2026` (or just `/splittag`, or `/splittag --template`) and download the template from the
      link. It also lists your saved rules and the exact command to type next. One row per event; rows with the
@@ -521,7 +545,7 @@ Quarters and financial years follow the year end set in Xero.
 
      | Column | What goes in it |
      | --- | --- |
-     | Rule | A name, e.g. `labour` (letters, digits, `-`, `_`). Saved, so you can run it again. |
+     | Rule | A name, e.g. `wages` (letters, digits, `-`, `_`; not `labour`, kept for `--labour`). Saved, so you can run it again. |
      | Accounts | `6300-6380`, `6355`, or a list: `6300-6380; 6400`. |
      | Types | `all`, or any of `invoices`, `bills`, `credits`, `bank`, `journals`, e.g. `journals` for only the journals in 6355. |
      | Contact, Description | Optional: only lines whose contact or description contains this. |
@@ -530,7 +554,7 @@ Quarters and financial years follow the year end set in Xero.
      | Value | The event code, e.g. `260902MEC`. |
      | Amount **or** Percent | One of them per row. |
 
-  2. `/splittag --Sep 2026 << labour.csv`. iLA reads September from Xero and shows each rule: the lines and total
+  2. `/splittag --Sep 2026 << rules.csv`. iLA reads September from Xero and shows each rule: the lines and total
      in scope, each event's amount and share, and what's left.
   3. `approve` tags the lines and saves the rules by name; `cancel` drops it.
 - **How amounts work** (total $600 on the accounts in scope):
@@ -541,9 +565,19 @@ Quarters and financial years follow the year end set in Xero.
     part. Amounts are exact to the cent in reports ($100 is $100.00).
   - **Different parts of one GL** can follow different rules (e.g. 6355 journals one way, 6355 bills another), but
     a line that falls into two rules is an error, so nothing is split twice.
-- **Run a saved rule again:** `/splittag --labour --Oct 2026`, or `/splittag --rule labour --Oct 2026`. Change the
+- **Run a saved rule again:** `/splittag --wages --Oct 2026`, or `/splittag --rule wages --Oct 2026`. Change the
   scope for that run only with `--gl 6355`, `--journals`, `--contact` or `--desc`, e.g.
-  `/splittag --gl 6300-6380 --sep-2026 --labour`. Running it again for the same period replaces the earlier split.
+  `/splittag --gl 6300-6380 --sep-2026 --wages`. Running it again for the same period replaces the earlier split.
+  A rule saved earlier under the name `labour` still runs with `--rule labour`.
+- **Labour by its pay runs:** `/splittag --labour --Oct 2026`.
+  1. **Variance first:** the pay-run journals for October against the actual labour in Xero on the same accounts
+     (Review settings → Labour accounts), with the %. Days with no pay run yet are noted with their estimate.
+  2. **Shares:** each event's share of October's labour from the Labour view (wages, super and on-costs, after your
+     changes); Unassigned's share stays untagged.
+  3. `approve` tags every line on the labour accounts in Xero for October (journals, bills, bank) pro-rated by those
+     shares. Nothing is saved as a rule: the shares come from the month each time. Running it again replaces the
+     split. If the variance is large, fix the cause first (a missing pay run, an accrual, the event calendar);
+     there's no automatic threshold.
 - **See saved rules:** `/splittag` on its own. Admin → Console → **Split rules** (delete one there) and **Split
   runs**. The tags themselves are under Core → Assignments (Rule "split:labour").
 - Splits are line-level decisions by you, so they win over Xero tracking and over a whole-transaction `/tag`.
@@ -810,6 +844,7 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 14 Nov 2026 | Added `/labour --<month>` (the month's labour from the pay runs plus an estimate for days with no pay run yet, against Xero; by account, department, event and pay run) and `/splittag --labour --<month>` (variance first, then tags the month's labour accounts by each event's share of the pay runs). The stub estimate is an Expected overlay journal, replaced when the pay run arrives. `labour` is no longer a name for your own split rules (an existing one runs with `--rule labour`); the template's sample rule is now `wages`. |
 | 14 Nov 2026 | Added the **pay-run journal** (Labour view → Journal): one Xero manual journal per month a pay run covers, by account × department × event with on-costs, credited to 2350, rounded to tie; kept as overlay journals (ADJ-nnnn, Expected), superseded by the payroll journal posted in Xero with the difference by account and department; *Download import file* once the checks pass. `/labour << file` names the journals. |
 | 14 Nov 2026 | Added the **Labour view** (Admin → Labour): the month's labour by employee, day and event, with why each day went where it did; change an employee's days or whole days to an event or Unassigned. |
 | 14 Nov 2026 | The GL account now comes from the **pay component** (Micropay's Pay Comp/Add Ded Code), set in Admin → Labour → Pay components (with CSV upload and download); cost accounts set the department and whether the cost can go to an event. The pay-run summary shows a *By pay component* table. |

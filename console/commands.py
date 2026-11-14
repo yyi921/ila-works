@@ -928,12 +928,13 @@ def review(ctx, cmd):
 
 @command(
     "labour", takes_input=True,
-    summary="Upload a pay-run file into iLA's labour ledger, or list the pay runs; each is checked against its "
-            "Summary total and the payroll journal in Xero.",
+    summary="Upload a pay-run file into iLA's labour ledger (checked against its Summary total and the payroll "
+            "journal in Xero), list the pay runs, or review a month's labour against Xero.",
     usage="/labour [<< breakdown.xlsx] [--<period>]",
     params=[("<< breakdown.xlsx", "The payroll file for one pay run (TECC: the Micropay employee breakdown). Only "
                                   "employee code and name are kept; the same pay run again replaces it."),
-            ("--<period>", "List the pay runs with days in the period, e.g. Oct 2026.")],
+            ("--<period>", "Review the month: pay runs (their days in it) and an estimate for days with no pay run "
+                           "yet, against Xero; then by account, department, event and pay run.")],
     examples=["/labour", "/labour << TECC-employee breakdown 01.11.xlsx", "/labour --Oct 2026"],
 )
 def labour(ctx, cmd):
@@ -1157,10 +1158,12 @@ def tag(ctx, cmd):
     "splittag", takes_input=True,
     summary="Split the amounts on chosen GL accounts across a dimension's values (e.g. labour across events) by "
             "fixed amounts, percentages or both, from a CSV of named rules or a saved rule.",
-    usage="/splittag [<< rules.csv] [--<rule name>|--rule <name>] [--<period>] [--gl <accounts>] "
+    usage="/splittag [<< rules.csv] [--<rule name>|--rule <name>|--labour] [--<period>] [--gl <accounts>] "
           "[--invoices --bills --credits --bank --journals|--all] [--contact <name>] [--desc <text>] [--template]",
     params=[("<< rules.csv", "Rules to apply; approving also saves them by name. /splittag --template for the file."),
-            ("--<rule name>  or  --rule <name>", "Run a saved rule (several: --rule labour, casuals)."),
+            ("--<rule name>  or  --rule <name>", "Run a saved rule (several: --rule wages, casuals)."),
+            ("--labour", "Share the month's labour across events by its pay runs: the variance against Xero first, "
+                         "then each event's share; approve tags the labour accounts."),
             ("--<period>", "Sep 2026, last month, Jul 2026 to Sep 2026; both dates included. Needed unless the file "
                            "has From and To."),
             ("--gl <accounts>", "Change the accounts for this run: 6300-6380, 6355 or 6300-6380; 6400."),
