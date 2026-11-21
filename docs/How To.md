@@ -126,8 +126,17 @@ Quarters and financial years follow the year end set in Xero.
 
 #### `/pl` (`/p&l`, `/profit`) — profit and loss
 - **Purpose:** P&L by account against budget and last year.
-- **Syntax:** `/pl [--<period>] [--mtd|--qtd|--ytd] [--by <dimension> | --<dimension>] [>> file.xlsx]`
+- **Syntax:** `/pl [--<period>] [--mtd|--qtd|--ytd] [--vs lm|ly|budget] [--landing|--xero] [--by <dimension> | --<dimension>] [>> file.xlsx]`
 - **Use it:** defaults to this month to date. `/pl --ytd >> pl-ytd.xlsx` for a pack.
+- **Against one comparison:** `/pl --Oct 2026 --vs lm` (last month), `--vs ly` (the same period last year) or
+  `--vs budget` gives Actual, the comparison, **Var $** (actual less the comparison) and **Var %**. `--vs lm` needs
+  one month; a part month is compared with the same days of the month before.
+- **With your overlay journals on top:** add `--landing`: **Xero · To be posted · Draft · After**, and the
+  variances are on After. It counts your own drafts, iLA's drafts and everything To be posted; rows a journal
+  changes are shaded. The comparison is always Xero's own figure.
+- **While `/OJ` is open** `/pl` is about the month you're composing with the journals on top, so `/pl --vs lm` is
+  enough; `--xero` leaves the journals out. The panel steps aside for the report; **Show the OJ panel** (or any
+  journal command) brings it back.
 - **By event:** `/pl --event --Sep 2026` (or `/pl --by event`, or any other iLA dimension) gives the P&L
   with a column per event, then **Unassigned**, **Total in iLA**, **Xero P&L** and **Difference**.
   - **Every tag counts once:** Xero's own Event tracking and the tags you approved in `/tag` are one set.
@@ -298,8 +307,9 @@ Quarters and financial years follow the year end set in Xero.
   - Every line, with its days worked, is under Admin → Labour → Pay lines (filter by pay run or cost account).
   - `/labour` lists the latest pay runs, whether each is in Xero yet and the difference; `/labour --Oct 2026` those
     with days in October.
-  - After the upload iLA builds the pay run's **journal** and names it (e.g. *ADJ-0004 31/10/2026 63,339.55,
-    ADJ-0005 01/11/2026 16,232.82 (Expected)*), with anything that stops its import file: see *Journal* below.
+  - After the upload iLA puts the pay run's **journal** in the bucket of overlay journals as its own draft and
+    names it (e.g. *OJ-0004-d 31/10/2026 63,339.55, OJ-0005-d 01/11/2026 16,232.82*), with anything that would stop
+    its import file. Work on it with `/OJ` (see *Overlay journals* below).
   - `/labour --Oct 2026` reviews the month (below); `/splittag --labour --Oct 2026` shares it out by event.
 
 #### `/labour --<month>` — review a month's labour
@@ -319,10 +329,10 @@ Quarters and financial years follow the year end set in Xero.
   pay-run journals post to (pay components' GL accounts and the on-costs).
 - **Estimate for days with no pay run yet:** from the last two pay runs, iLA works out the cost per day on days with
   an event (event or bump day) and on days without, and applies them to the missing days by the event calendar. It's
-  kept as an overlay journal (ADJ, **Expected**) dated the month end, by account and department, credited to the
-  clearing account, and rebuilt each time you look. When the pay run for those days is uploaded, the estimate is
-  marked **Superseded** and the pay run's journal takes its place. No estimate when the last pay run ended more than a
-  month before.
+  kept as one of iLA's draft overlay journals dated the month end, by account and department, credited to the
+  clearing account, and rebuilt each time you look. When the pay run for those days is uploaded, the estimate leaves
+  the bucket and the pay run's journal takes its place. No estimate when the last pay run ended more than a month
+  before.
 
 #### Labour view (Admin → Labour → Labour view) — labour by employee, day and event
 - **Purpose:** see where each month's labour goes, why, and change it. It's the base for the pay-run journal and for
@@ -346,8 +356,8 @@ Quarters and financial years follow the year end set in Xero.
     calendar. Better still, add the event's dates (Core → Dimension values) so iLA finds it itself.
   - **By event:** one row per event with its dates, employees, hours, wages, super, on-costs and total, then
     Unassigned (split into not taggable and no event).
-  - **Journal:** each pay run with days in the month, as Xero manual journals (see below), and **Download import
-    file**.
+  - **Journal:** each pay run with days in the month, as Xero manual journals (see below). Their import
+    file is generated in the console with `/OJ`.
 - The tabs add up to the same total (the Journal tab's month can differ by a cent of rounding). Every change is kept
   under Admin → Labour → Labour changes and in the audit log.
 
@@ -360,18 +370,114 @@ Quarters and financial years follow the year end set in Xero.
   pay-run end date. FNE 1/11/2026 (19 Oct – 1 Nov) gives **31/10/2026** and **1/11/2026**, both in one file.
 - **Ties:** lines are rounded to the cent and any cent left over goes to the largest line, so the pay ties to the
   pay-run total and each on-cost to its rate × the pay-run total, exactly as `/labour` shows them.
-- **Overlay journals:** each month's journal is kept as **ADJ-nnnn** (Admin → Core → Overlay journals), made by
-  labour, in the **Expected** bucket. While Expected, iLA rebuilds it whenever the pay run, the event dates or your
-  labour changes move; its number stays the same.
-- **Superseded:** when the accountant's own payroll journal for the pay run is in Xero (narration with FNE and the
-  end date), iLA's journals are marked **Superseded** and the tab shows iLA against Xero **by account and
-  department**. (Today TECC's journal puts all payroll tax and workcover on Overhead & Venue Costs; iLA's follows
-  the pay.)
-- **Download import file** (one CSV for all the pay run's journals; Xero → Accounting → Manual journals → Import) is
-  offered only when the checks pass: every cost account has a department in Xero, every pay component a GL account in
-  the chart, the clearing account and on-cost rates are set, the Event dimension is linked to Xero's Event tracking,
-  **every event used is an Event option in Xero** (add a new one in Xero first, then refresh), and the file ties.
-  iLA never posts to Xero.
+- **In the bucket:** until the payroll journal is in Xero, each month's journal is one of iLA's **draft overlay
+  journals** (OJ-nnnn), rebuilt whenever the pay run, the event dates or your labour changes move; its number stays
+  the same. Change it, or generate its Xero import file, in the console with `/OJ` (below).
+- **In Xero:** when the payroll journal for the pay run is in Xero (narration with FNE and the end date), iLA's
+  drafts leave the bucket and the tab shows iLA against Xero **by account and department**. (Today TECC's journal
+  puts all payroll tax and workcover on Overhead & Venue Costs; iLA's follows the pay.)
+- The tab lists what would stop the import file: a cost account without a department in Xero, a pay component
+  without a GL account, the clearing account or on-cost rates not set, the Event dimension not linked to Xero's Event
+  tracking, or **an event that isn't an Event option in Xero** (add it in Xero first, then refresh).
+
+### Overlay journals
+
+An **overlay journal (OJ)** is the difference between what the accounts should be and what is in Xero. There is one
+bucket of them, whoever made them (you, or iLA from labour), with two statuses:
+
+| Status | Meaning |
+| --- | --- |
+| **Draft** (`OJ-0012-d`) | Being worked on. **Your drafts are private**: only you see them and their effect. iLA's drafts are seen by everyone. |
+| **To be posted** (`OJ-0012-p1`) | Its Xero import file has been generated. Locked, and seen by everyone. |
+
+Once a journal is in Xero it **leaves the bucket** (the audit log keeps what it was), so nothing is counted twice.
+iLA never posts to Xero: you import the file yourself.
+
+#### `/OJ` — compose journals and see the P&L with them on top
+- **Syntax:** `/OJ [--<month>] [--refresh]`, then journal commands **without a slash**.
+- **The screen:** a panel stays in place while `/OJ` is open. Along the top (frozen): the month and net profit as
+  **Xero · To be posted · Draft · After**. Left: the journal you're on, or the month's bucket. Right: the P&L with the
+  journals on top; rows a journal changes are shaded. Both update after every line you type. **Hide** shows the
+  console behind it; **Show the OJ panel** brings it back. Everything is saved as you type.
+- **Play (make a journal):**
+
+  | Type | What happens |
+  | --- | --- |
+  | `new Wages accrual Oct` | A new draft dated the month end |
+  | `dr 6345 1200 fb DYN stub wages` | Debit 6345 1,200.00; Departments = Food and Beverage Services; Event = …DYN; then the description |
+  | `cr 2350` | No amount: the balancing figure |
+  | `6345 1200 to 2350` | Debit and credit in one line |
+  | `move 500 from 6345 to 6346` | A reclass |
+  | `rev` · `rev 15/11` · `rev off` | Reverse on day 1 of next month, or that date; off again. Without it a journal doesn't reverse |
+  | `copy 12` · `reverse 12` | A new draft with the same lines, or the opposite |
+
+  Accounts by code or part of the name. Tracking by the start of the option's name, its initials (`fb`, `ov`) or part
+  of an event code (`DYN`; events near the month are preferred). Put tracking before the description. Tax is BAS
+  Excluded unless you add `gst`, `gstfree` or `bas`.
+- **Or say it in plain English.** Anything that isn't one of the short commands is read by the language model
+  (Claude) and turned into them; the message line shows the commands it ran, and `undo` steps back through them.
+
+  | Say | What happens |
+  | --- | --- |
+  | `accrue audit fee for another 1200` | A new draft: debit the audit fee account, credit the accrual account |
+  | `change the GL 6345 to 6400` | The line on 6345 moves to 6400 |
+  | `make it 1500 and reverse it next month` | Both sides become 1,500.00 and the journal reverses on day 1 |
+  | `put the expense on overhead and the Dynamic lunch` | Departments and Event set on that line |
+
+  - **Accrue** credits your accrual account; **prepay** debits your prepayment account. Both are filled in from the
+    chart the first time; change them in Admin → Console → **OJ settings**.
+  - **Memory:** the first time, the accounts come from a similar journal already in Xero, or else from the chart (the
+    message says which: check them). When you generate a journal's Xero file, iLA **remembers** it (its narration,
+    your words, its accounts and tracking) and uses the same ones next time. See or delete what it remembers in
+    Admin → Console → **OJ memory**.
+  - If it isn't sure which account or line you mean, it asks instead of guessing. If one of its commands fails,
+    nothing is changed.
+  - It can compose and change journals only: generating the file, deleting and marking as posted stay yours.
+  - The model is sent your sentence, the open journal, the chart of accounts, tracking option names, what iLA
+    remembers and the narrations and lines of similar manual journals. Short commands never go to the model.
+  - On ila.works this needs `ANTHROPIC_API_KEY` set (the same key that reads bills for `/accrue`).
+- **Tweak:**
+
+  | Type | What happens |
+  | --- | --- |
+  | `3 1500` | Line 3's amount |
+  | `3 acc 6346` · `3 event TOW` · `3 dept ov` · `3 desc …` · `3 tax gst` · `3 cr` | Other parts of line 3 (`3 event none` clears it) |
+  | `del 3` · `date 31/10` · `narr …` | Delete line 3; the journal's date; its narration |
+  | `undo` · `redo` · `versions` · `restore 2` | Step through every change, or go back to a version |
+  | `open 12` · `drop` | Work on another journal; delete this one |
+
+  Changing one of **iLA's** drafts makes your own copy (a new number); the others keep seeing iLA's until yours is To
+  be posted.
+- **Listen:**
+
+  | Type | What it shows |
+  | --- | --- |
+  | `pl` · `pl lab` | The P&L by group, or one group's accounts |
+  | `bs` | The balance sheet accounts at month end, the ones the journals touch first |
+  | `why 6345` | Xero's lines and the journal lines behind an account |
+  | `list` | The month's bucket, with **Open**, **Generate Xero file** and **Back to draft** buttons |
+  | `mute 12` · `solo 12` · `unmute` | Leave a journal out of the view, or see only one |
+  | `refresh` | Read the month from Xero again |
+  | `/pl --vs lm` · `/pl --vs ly` · `/pl --vs budget` | The month with your journals on top against last month, last year or budget, as a report in the console (see `/pl`) |
+
+- **Finish:**
+
+  | Type (or the button) | What happens |
+  | --- | --- |
+  | `file` · `file 12` · `file all` — **Generate Xero file** | Checks the journal (balanced, accounts and tracking exist in Xero), builds the import file and gives the download link. **That makes it To be posted.** `file all` puts all your drafts for the month in one file |
+  | `back 12` — **Back to draft** | Unlocks it and cancels its file; generate again when ready (`-p2`) |
+  | `posted 12` | Take it out of the bucket by hand, if iLA can't find it in Xero |
+  | `done` | Close `/OJ` (nothing is lost) |
+
+- **Importing:** in Xero, Accounting → Manual journals → Import. The narration ends with the journal's reference, e.g.
+  `[OJ-0012-p1]`: leave it there. On the next `/OJ` (or `refresh`) iLA finds it in Xero and the journal leaves the
+  bucket. If an older, cancelled file was imported, iLA says so.
+- **Good to know:**
+  - Numbers are never used again: after OJ-0012 is in Xero or deleted, the next is OJ-0013.
+  - Only the person who made a journal To be posted can take it back or delete it.
+  - Admin → Core → **Overlay journals** lists the bucket (read only).
+  - Not built yet: the P&L by event and the trial balance in the panel, `--landing` on `/pl`, `/bs` and `/review`,
+    and `/accrue`'s journal in the bucket.
 
 ### Month-end accruals
 
@@ -845,6 +951,9 @@ Planned, not built yet:
 | Date | Change |
 | --- | --- |
 | 14 Nov 2026 | `/pl` reads a period typed without dashes (`/pl Oct 26 --by event`); anything else typed there (e.g. `/pl oc 26`) is an error instead of being ignored, which used to show this month to date. |
+| 21 Nov 2026 | **Plain English in `/OJ`**: say "accrue audit fee for another 1200" or "change the GL 6345 to 6400" and iLA turns it into journal commands with the language model. Accrue credits and prepay debits the accounts in Admin → Console → OJ settings. iLA remembers each journal whose file you generate (OJ memory) and reuses its accounts next time. |
+| 21 Nov 2026 | `/pl --vs lm|ly|budget` compares the P&L with one of last month, last year or budget (Var $ and Var %); `--landing` puts the overlay journals on top (Xero · To be posted · Draft · After). While `/OJ` is open, `/pl` uses the month being composed with the journals on top. |
+| 21 Nov 2026 | Added **overlay journals** and `/OJ`: compose draft journals in the console with a panel that stays on screen (the journal on the left, the P&L with the journals on top on the right), undo and versions, and **Generate Xero file**, which makes a draft To be posted. One bucket with two statuses (Draft, To be posted); a journal leaves it once it's in Xero. Labour's pay-run journals and estimate are iLA's drafts in the same bucket (ADJ numbers became OJ; Expected and Superseded are gone), and the Labour view's *Download import file* moved to `/OJ`. Column headings now stay frozen while a table's rows scroll, in every console result. |
 | 14 Nov 2026 | Added `/labour --<month>` (the month's labour from the pay runs plus an estimate for days with no pay run yet, against Xero; by account, department, event and pay run) and `/splittag --labour --<month>` (variance first, then tags the month's labour accounts by each event's share of the pay runs). The stub estimate is an Expected overlay journal, replaced when the pay run arrives. `labour` is no longer a name for your own split rules (an existing one runs with `--rule labour`); the template's sample rule is now `wages`. |
 | 14 Nov 2026 | Added the **pay-run journal** (Labour view → Journal): one Xero manual journal per month a pay run covers, by account × department × event with on-costs, credited to 2350, rounded to tie; kept as overlay journals (ADJ-nnnn, Expected), superseded by the payroll journal posted in Xero with the difference by account and department; *Download import file* once the checks pass. `/labour << file` names the journals. |
 | 14 Nov 2026 | Added the **Labour view** (Admin → Labour): the month's labour by employee, day and event, with why each day went where it did; change an employee's days or whole days to an event or Unassigned. |

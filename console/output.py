@@ -68,14 +68,19 @@ class Table:
     title: str = ""
     # Indexes of rows to show as totals.
     total_rows: set = field(default_factory=set)
-    # Row index -> shading: "ok" (green, e.g. signed off) or "warn" (amber, e.g. changed since sign-off).
+    # Row index -> shading: "ok" (green, e.g. signed off), "warn" (amber, e.g. changed since sign-off) or "touch"
+    # (a row an overlay journal changes).
     tones: dict = field(default_factory=dict)
+    # Row index -> [(button label, what it types)]: buttons shown at the end of the row.
+    actions: dict = field(default_factory=dict)
 
-    def add(self, *cells, total=False, tone=""):
+    def add(self, *cells, total=False, tone="", actions=()):
         if total:
             self.total_rows.add(len(self.rows))
         if tone:
             self.tones[len(self.rows)] = tone
+        if actions:
+            self.actions[len(self.rows)] = list(actions)
         self.rows.append(list(cells))
 
     def to_json(self):
@@ -84,7 +89,9 @@ class Table:
             "columns": [{"label": c.label, "kind": c.kind} for c in self.columns],
             "rows": [{"cells": [fmt(v, c.kind) for v, c in zip(row, self.columns)],
                       "negative": [isinstance(v, Decimal) and v < 0 for v in row],
-                      "total": i in self.total_rows, "tone": self.tones.get(i, "")}
+                      "total": i in self.total_rows, "tone": self.tones.get(i, ""),
+                      "actions": [{"label": label, "command": command}
+                                  for label, command in self.actions.get(i, [])]}
                      for i, row in enumerate(self.rows)],
         }
 
@@ -123,17 +130,36 @@ class Result:
     subtitle: str = ""
     link: str = ""
     link_text: str = ""
+    # A view that stays on screen and updates in place (see console/oj.py): {"title", "headline": [{label, value}],
+    # "status", "left": {"title", "blocks"}, "right": {...}, "message", "level"}, or {"closed": True}.
+    panel: dict = None
 
     def add(self, block):
         self.blocks.append(block)
         return block
 
     def to_json(self):
-        return {"title": self.title, "subtitle": self.subtitle, "link": self.link, "link_text": self.link_text,
-                "blocks": [b.to_json() for b in self.blocks]}
+        out = {"title": self.title, "subtitle": self.subtitle, "link": self.link, "link_text": self.link_text,
+               "blocks": [b.to_json() for b in self.blocks]}
+        if self.panel is not None:
+            out["panel"] = self._panel_json()
+        return out
+
+    def _panel_json(self):
+        panel = dict(self.panel)
+        if panel.get("closed"):
+            return panel
+        panel["headline"] = [{"label": f["label"], "value": fmt_money(f["value"]),
+                              "negative": Decimal(f["value"]) < 0} for f in panel.get("headline", [])]
+        for side in ("left", "right"):
+            panel[side] = {"title": panel[side]["title"], "blocks": [b.to_json() for b in panel[side]["blocks"]]}
+        return panel
 
     def tables(self):
-        return [b for b in self.blocks if isinstance(b, Table)]
+        blocks = list(self.blocks)
+        if self.panel and not self.panel.get("closed"):
+            blocks += self.panel["left"]["blocks"] + self.panel["right"]["blocks"]
+        return [b for b in blocks if isinstance(b, Table)]
 
 
 class ExportError(ValueError):

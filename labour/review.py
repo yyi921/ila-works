@@ -6,7 +6,7 @@ the estimate for days no pay run covers yet.
   accounts the pay-run journals post to), every type: journals, bills, bank.
 - **Stub estimate**: days of the month after the last pay run, estimated from the last two pay runs: their
   average cost per day on days with an event (event or bump day) and on days without, applied to the stub days by the
-  event calendar. Kept as an overlay journal (ADJ, Expected) by account and department; when a pay run covering
+  event calendar. Kept as one of iLA's draft overlay journals, by account and department; when a pay run covering
   those days arrives, its journal replaces the estimate.
 """
 
@@ -19,6 +19,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
 
+from core import overlay
 from core.models import Adjustment, AdjustmentLine
 
 from . import allocation, journal
@@ -142,15 +143,12 @@ def month_review(org, start, end, *, estimate=True):
 
     journal_by_account, runs, not_in_xero = defaultdict(lambda: ZERO), [], ZERO
     for run in runs_touching(org, start, end).order_by("period_end"):
-        _, adjustments = journal.build(run)
+        p, _ = journal.build(run)
         amount = ZERO
-        for adj in adjustments:
-            if adj.period_end != end:
-                continue
-            for line in adj.lines.all():
-                if line.amount > 0:
-                    journal_by_account[line.account_code] += line.amount
-                    amount += line.amount
+        for line in p.lines:
+            if journal.month_end(line.date) == end:
+                journal_by_account[line.account] += line.amount
+                amount += line.amount
         runs.append((run, amount, run.xero_journal_id is not None))
         if run.xero_journal_id is None:
             not_in_xero += amount
@@ -193,21 +191,21 @@ def event_shares(review):
 # --- The stub estimate ---------------------------------------------------------------------------------------------
 
 def _estimates(org, end):
-    return Adjustment.objects.filter(organisation=org, origin=ESTIMATE, origin_ref=f"{end:%Y-%m-%d}")
+    """iLA's estimate for the month, or the To be posted journal someone made of it (that one first)."""
+    return (Adjustment.objects.filter(organisation=org, origin=ESTIMATE, origin_ref=f"{end:%Y-%m-%d}")
+            .exclude(status=Adjustment.Status.DRAFT, made_by__isnull=False).order_by("-status"))
 
 
 @transaction.atomic
 def build_estimate(org, start, end, days):
-    """The estimate for ``days`` (no pay run yet) as an Expected overlay journal dated ``end``, rebuilt each time;
+    """The estimate for ``days`` (no pay run yet) as iLA's draft overlay journal dated ``end``, rebuilt each time;
     replaced (Superseded) once pay runs cover the month. None when nothing to estimate."""
     existing = _estimates(org, end).first()
     if not days:
-        if existing and existing.status == Adjustment.Status.EXPECTED:
-            existing.status = Adjustment.Status.SUPERSEDED
-            existing.note = "Replaced by the pay-run journal for these days."
-            existing.save()
+        if existing and existing.is_draft:
+            overlay.leave(existing, None, "replaced by the pay-run journal for these days")
         return None
-    if existing and existing.status != Adjustment.Status.EXPECTED:
+    if existing and not existing.is_draft:
         return existing
     sample = list(PayRun.objects.filter(organisation=org, period_end__lt=days[0]).order_by("-period_end")
                   [:SAMPLE_RUNS])
@@ -243,7 +241,7 @@ def build_estimate(org, start, end, days):
     lines[biggest] += amount - sum(lines.values(), ZERO)
     adj = existing or Adjustment(organisation=org, origin=ESTIMATE, origin_ref=f"{end:%Y-%m-%d}")
     busy_days = sum(1 for d in days if busy(d))
-    adj.date, adj.period_end, adj.status = end, end, Adjustment.Status.EXPECTED
+    adj.date, adj.period_end = end, end
     adj.narration = f"Labour estimate {days[0]:%d/%m}–{days[-1]:%d/%m/%Y} (no pay run yet)"
     adj.evidence = (f"{len(days)} days ({busy_days} with an event) at the average of pay runs "
                     + ", ".join(f"{r.period_end:%d/%m}" for r in sorted(sample, key=lambda r: r.period_end)))[:255]
@@ -255,12 +253,12 @@ def build_estimate(org, start, end, days):
     rows = [(account, department, value) for (account, department), value in sorted(lines.items()) if value]
     AdjustmentLine.objects.bulk_create(
         [AdjustmentLine(adjustment=adj, line_number=i, account_code=account, description=description,
-                        amount=value, tracking_name1=settings.department_tracking if department else "",
+                        amount=value, tax_rate=settings.tax_rate, tracking_name1=settings.department_tracking if department else "",
                         tracking_option1=department or "")
          for i, (account, department, value) in enumerate(rows, 1)]
         + [AdjustmentLine(adjustment=adj, line_number=len(rows) + 1,
                           account_code=settings.credit_account or NOT_MAPPED, description=description,
-                          amount=-amount)])
+                          amount=-amount, tax_rate=settings.tax_rate)])
     return adj
 
 

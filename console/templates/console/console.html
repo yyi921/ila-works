@@ -13,6 +13,16 @@
     <p class="sub">Type a command starting with <code>/</code>. Try <code>/status</code> or <code>/help</code>.
     Parameters follow <code>--</code> in any order; <code>&gt;&gt; file.xlsx</code> saves the result.</p></div></div>
 </main>
+<section id="panel" aria-live="polite">
+  <div class="p-head"><h2 id="p-title"></h2><div id="p-figs" style="display:contents"></div>
+    <span class="p-status" id="p-status"></span><button type="button" class="tool" id="p-hide">Hide</button></div>
+  <div class="p-body">
+    <div class="p-col"><h3 id="p-lt"></h3><div class="p-scroll" id="p-left"></div></div>
+    <div class="p-col"><h3 id="p-rt"></h3><div class="p-scroll" id="p-right"></div></div>
+  </div>
+  <div class="p-msg" id="p-msg"></div>
+</section>
+<button type="button" class="tool" id="p-show">Show the OJ panel</button>
 <div class="bar">
   <form id="form" autocomplete="off">
     {% csrf_token %}
@@ -24,6 +34,7 @@
   <div class="hint">Enter runs · ↑ ↓ history · Tab completes a command name · /clean clears the screen</div>
 </div>
 {{ command_names|json_script:"command-names" }}
+{{ resume|json_script:"resume" }}
 <script>
 (() => {
   const log = document.getElementById("log");
@@ -75,6 +86,8 @@
     const numeric = block.columns.map(c => ["money", "pct", "number"].includes(c.kind));
     const head = el("tr");
     block.columns.forEach((c, i) => head.append(el("th", numeric[i] ? "num" : "", c.label)));
+    const hasActions = block.rows.some(r => r.actions && r.actions.length);
+    if (hasActions) head.append(el("th", "", ""));
     const thead = el("thead");
     thead.append(head);
     table.append(thead);
@@ -82,6 +95,16 @@
     for (const row of block.rows) {
       const tr = el("tr", [row.total ? "total" : "", row.tone ? "tone-" + row.tone : ""].join(" ").trim());
       row.cells.forEach((v, i) => tr.append(el("td", (numeric[i] ? "num" : "") + (row.negative[i] ? " neg" : ""), v)));
+      if (hasActions) {
+        const cell = el("td", "acts");
+        for (const a of row.actions || []) {
+          const b = el("button", "tool", a.label);
+          b.type = "button";
+          b.addEventListener("click", () => { run(a.command); input.focus(); });
+          cell.append(b);
+        }
+        tr.append(cell);
+      }
       body.append(tr);
     }
     table.append(body);
@@ -121,6 +144,63 @@
     setTimeout(() => { button.textContent = label; }, 2000);
   }
 
+  // --- The panel that stays on screen (/OJ) ---
+  const panel = document.getElementById("panel");
+  const showButton = document.getElementById("p-show");
+  const panelMsg = document.getElementById("p-msg");
+  let panelOpen = false;  // a panel conversation is open (even if hidden behind the log)
+  const panelOn = () => panel.classList.contains("on");
+
+  function sizePanel() {
+    const head = document.querySelector("header"), bar = document.querySelector(".bar");
+    document.documentElement.style.setProperty("--head-h", (head ? head.offsetHeight : 47) + "px");
+    document.documentElement.style.setProperty("--bar-h", (bar ? bar.offsetHeight : 92) + "px");
+  }
+  window.addEventListener("resize", sizePanel);
+
+  function setPanelMessage(text, level, link, linkText) {
+    panelMsg.className = "p-msg" + (level === "error" ? " error" : "");
+    panelMsg.replaceChildren(document.createTextNode(text || ""));
+    if (link) {
+      const a = el("a", "", linkText || "Download");
+      a.href = link;
+      panelMsg.append(a);
+    }
+  }
+
+  function showPanel(on) {
+    panel.classList.toggle("on", on);
+    showButton.classList.toggle("on", panelOpen && !on);
+    if (on) sizePanel();
+  }
+
+  function renderPanel(r) {
+    const p = r.panel;
+    if (p.closed) { panelOpen = false; showPanel(false); return false; }
+    panelOpen = true;
+    document.getElementById("p-title").textContent = p.title;
+    const figs = document.getElementById("p-figs");
+    figs.replaceChildren();
+    for (const f of p.headline) {
+      const box = el("div", "p-fig");
+      box.append(el("div", "label", f.label), el("div", "value" + (f.negative ? " neg" : ""), f.value || "–"));
+      figs.append(box);
+    }
+    document.getElementById("p-status").textContent = p.status || "";
+    for (const [side, title, body] of [["left", "p-lt", "p-left"], ["right", "p-rt", "p-right"]]) {
+      document.getElementById(title).textContent = p[side].title;
+      const target = document.getElementById(body);
+      const top = target.scrollTop;
+      target.replaceChildren(...p[side].blocks.map(renderBlock));
+      target.scrollTop = top;
+    }
+    setPanelMessage(p.message, p.level, r.link, r.link_text);
+    showPanel(true);
+    return true;
+  }
+  document.getElementById("p-hide").addEventListener("click", () => { showPanel(false); input.focus(); });
+  showButton.addEventListener("click", () => { showPanel(true); input.focus(); });
+
   // Commands that are safe to run again just to save their result (not ones that start or change something).
   function canSave(command) {
     return /^\/\w/.test(command) && !command.includes("<<") && !command.includes(">>")
@@ -150,6 +230,14 @@
       return;
     }
     const r = data.result;
+    if (r.panel) {
+      const open = renderPanel(r);
+      card.append(el("h2", "", r.title));
+      card.append(el("p", "sub", open ? "Open in the panel. Type journal commands without a slash; done closes it."
+                                      : (r.subtitle || "")));
+      return;
+    }
+    if (panelOn()) showPanel(false);
     card.append(el("h2", "", r.title));
     if (r.subtitle) card.append(el("p", "sub", r.subtitle));
     for (const block of r.blocks) card.append(renderBlock(block));
@@ -170,7 +258,28 @@
     if (data.organisation !== undefined) document.getElementById("org").textContent = data.organisation || "No organisation connected";
   }
 
+  // Typing while the panel is showing updates it in place; nothing is added to the log.
+  async function runInPanel(command) {
+    setPanelMessage("Working…");
+    const body = new FormData();
+    body.append("command", command);
+    let data;
+    try {
+      const resp = await fetch("{% url 'console:run' %}", {method: "POST", body, headers: {"X-CSRFToken": csrf}});
+      data = await resp.json();
+    } catch (e) {
+      setPanelMessage("Couldn't reach iLA. Check your connection and try again.", "error");
+      return;
+    }
+    if (!data.ok) { setPanelMessage(data.error, "error"); return; }
+    if (data.result.panel && renderPanel(data.result)) return;
+    const card = addEntry(command);
+    showResult(card, data, command);
+    card.parentElement.scrollIntoView({block: "end"});
+  }
+
   async function run(command, files) {
+    if (panelOn() && !/^[\/_]/.test(command) && !(files && files.length)) return runInPanel(command);
     const card = addEntry(command);
     const body = new FormData();
     body.append("command", command);
@@ -224,6 +333,9 @@
       run(command);
     }
   });
+
+  sizePanel();
+  if (JSON.parse(document.getElementById("resume").textContent || '""')) run("/OJ");
 
   input.addEventListener("keydown", (event) => {
     if (event.key === "ArrowUp" && cursor > 0) {

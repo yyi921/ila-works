@@ -226,14 +226,22 @@ def _budget_missing_reason(src):
 
 @command(
     "pl",
-    summary="Profit and loss by account, against budget and last year; or by event (any iLA dimension) with "
-            "Unassigned and a check against Xero.",
-    usage="/pl [--<period>] [--mtd|--qtd|--ytd] [--by <dimension> | --<dimension>] [>> file.xlsx]",
-    params=[("--<period>", "Defaults to this month to date"), ("--mtd --qtd --ytd", "To-date window (pick one)"),
+    summary="Profit and loss by account, against budget and last year, or against one of last month, last year "
+            "or budget (--vs), optionally with the overlay journals on top (--landing); or by event (any iLA "
+            "dimension) with Unassigned and a check against Xero.",
+    usage="/pl [--<period>] [--mtd|--qtd|--ytd] [--vs lm|ly|budget] [--landing|--xero] "
+          "[--by <dimension> | --<dimension>] [>> file.xlsx]",
+    params=[("--<period>", "Defaults to this month to date (while /OJ is open: the month being composed)"),
+            ("--mtd --qtd --ytd", "To-date window (pick one)"),
+            ("--vs lm|ly|budget", "Against one comparison: last month, the same period last year or budget, with "
+                                  "Var $ and Var %. Without it: budget and last year side by side."),
+            ("--landing", "With the overlay journals on top: Xero, To be posted, Draft, After (variances are on "
+                          "After). On by default while /OJ is open; --xero leaves them out."),
             ("--by <dimension>  or  --<dimension>", "A column per value, e.g. --by event or just --event. Xero "
                                                     "tracking and iLA tags count together.")],
     examples=["/pl", "/pl --September 2026", "/pl --ytd >> pl-ytd.xlsx", "/pl --Jul 2026 to Sep 2026",
-              "/pl --event --Sep 2026", "/pl --by event --FY2027 >> events.xlsx"],
+              "/pl --event --Sep 2026", "/pl --by event --FY2027 >> events.xlsx", "/pl --Oct 2026 --vs lm",
+              "/pl --Oct 2026 --vs budget --landing"],
     aliases=("p&l", "profit"),
 )
 def pl(ctx, cmd):
@@ -254,8 +262,12 @@ def pl(ctx, cmd):
                                "/pl --Oct 2026 --by event.")
         cmd.params = [cmd.text] + list(cmd.params)
         cmd.text = ""
-    params = read_params(cmd, ctx, flags=set(WINDOWS) | (set(dimensions) - set(WINDOWS)), period=True,
-                         exclusive=[WINDOWS], keyed={"by": lambda value, _: value.strip()})
+    from . import pl_view
+
+    own = set(WINDOWS) | {"landing", "xero"}
+    params = read_params(cmd, ctx, flags=own | (set(dimensions) - own), period=True,
+                         exclusive=[WINDOWS, ("landing", "xero")],
+                         keyed={"by": lambda value, _: value.strip(), "vs": pl_view.read_vs})
     chosen = [dimensions[f] for f in params.flags if f in dimensions]
     if "by" in params.values:
         wanted = params.values["by"].lower()
@@ -266,11 +278,26 @@ def pl(ctx, cmd):
         chosen.append(dimensions[wanted])
     if len({d.pk for d in chosen}) > 1:
         raise CommandError("Report by one dimension at a time.")
+    # While /OJ is open, /pl is about the month being composed, with the overlay journals on top.
+    composing = None
+    if isinstance(ctx.organisation, Organisation) and ctx.user is not None:
+        from .oj import open_draft
+
+        composing = open_draft(ctx)
+    if composing is not None and params.period is None and not params.flags & set(WINDOWS):
+        end = composing.period_end
+        params.period = month_period(end.year, end.month)
     period = _periods(params, ctx)[0]
+    vs = params.values.get("vs")
+    landing = "landing" in params.flags or (composing is not None and "xero" not in params.flags and not chosen)
     if chosen:
+        if vs or "landing" in params.flags:
+            raise CommandError("By event doesn't take --vs or --landing yet: leave one of them out.")
         from .pl_by_dimension import report
 
         return report(ctx, chosen[0], period)
+    if vs or landing:
+        return pl_view.report(ctx, period, vs, landing)
     src = ctx.source
     accounts = src.accounts()
     current, last_year = src.profit_and_loss(period.start, period.end, with_last_year=True)
@@ -1186,6 +1213,25 @@ def tag(ctx, cmd):
 )
 def splittag(ctx, cmd):
     from .split_tag import start
+
+    return start(ctx, cmd)
+
+
+@command(
+    "oj",
+    summary="Compose overlay journals for a month (drafts that never go to Xero by themselves) and see the P&L "
+            "with them on top; generating a journal's Xero import file makes it To be posted.",
+    usage="/OJ [--<month>] [--refresh]",
+    params=[("--<month>", "The month to work on, e.g. Oct 2026. Without it: the month you had open, else last "
+                          "month."),
+            ("--refresh", "Read the month from Xero again."),
+            ("then, without a slash", "new <narration> · dr 6345 1200 fb DYN wages · cr 2350 · 6345 1200 to 2350 · "
+                                      "move 500 from 6345 to 6346 · rev · 3 1500 · del 3 · undo · redo · pl · "
+                                      "pl lab · bs · why 6345 · list · mute 12 · file · back 12 · done")],
+    examples=["/OJ --Oct 2026", "/OJ"],
+)
+def oj(ctx, cmd):
+    from .oj import start
 
     return start(ctx, cmd)
 

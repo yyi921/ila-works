@@ -223,13 +223,11 @@
     <h2>{{ r.run }} <span class="lv-muted">· {{ r.run.file_name }}</span></h2>
     <p>Pay {{ r.run.total|floatformat:"2g" }} + on-costs = <strong>{{ r.plan.target|floatformat:"2g" }}</strong> ·
       journals {{ r.plan.total|floatformat:"2g" }} {% if r.ties %}<span class="lv-muted">ties</span>{% else %}<strong>doesn't tie</strong>{% endif %}
-      {% if r.run.xero_journal %}· <strong>Superseded</strong> by Xero's {{ r.run.xero_journal.narration }} ({{ r.run.xero_journal.date|date:"d/m/Y" }}){% else %}· <strong>Expected</strong> <span class="lv-muted">(the payroll journal isn't in Xero yet)</span>{% endif %}</p>
-    {% if r.plan.problems %}<ul class="messagelist">{% for t in r.plan.problems %}<li class="warning">{{ t }}</li>{% endfor %}</ul>
-    {% else %}<p><a class="button" href="?organisation={{ org.pk }}&month={{ month }}&tab=journal&download={{ r.run.pk }}">Download import file</a>
-      <span class="lv-muted">Xero manual journal CSV: every journal below in one file.</span></p>{% endif %}
+      {% if r.run.xero_journal %}· <strong>In Xero</strong>: {{ r.run.xero_journal.narration }} ({{ r.run.xero_journal.date|date:"d/m/Y" }}), so no overlay journal is kept{% else %}· <span class="lv-muted">the payroll journal isn't in Xero yet</span>{% endif %}</p>
+    {% if r.plan.problems and not r.run.xero_journal %}<ul class="messagelist">{% for t in r.plan.problems %}<li class="warning">{{ t }}</li>{% endfor %}</ul>{% endif %}
     {% for j in r.journals %}
-      <h3>{{ j.adj.reference }} · {{ j.adj.date|date:"d/m/Y" }} · {{ j.adj.get_status_display }} · {{ j.debit|floatformat:"2g" }}</h3>
-      <p class="lv-muted">{{ j.adj.narration }}</p>
+      <h3>{{ j.date|date:"d/m/Y" }} · {{ j.debit|floatformat:"2g" }}{% if j.adj %} · {{ j.adj.reference }} ({{ j.adj.get_status_display }}{% if j.adj.by_ila %}, iLA's{% endif %}){% endif %}</h3>
+      <p class="lv-muted">{{ j.narration }}</p>
       <div class="lv-wrap"><table class="lv">
         <thead><tr><th>Account</th><th>Department</th><th class="n">Amount</th></tr></thead>
         <tbody>{% for code, dept, amount in j.summary %}<tr><td>{{ code }}</td><td>{{ dept }}</td><td class="n">{{ amount|floatformat:"2g" }}</td></tr>{% endfor %}</tbody>
@@ -242,7 +240,7 @@
       </details>
     {% endfor %}
     {% if r.difference is not None %}
-      <h3>iLA's journals against Xero's payroll journal</h3>
+      <h3>iLA's journal against Xero's payroll journal</h3>
       <div class="lv-wrap"><table class="lv">
         <thead><tr><th>Account</th><th>Department</th><th class="n">iLA</th><th class="n">Xero</th><th class="n">Difference</th></tr></thead>
         <tbody>{% for name, dept, ila, xero, diff in r.difference %}<tr><td>{{ name }}</td><td>{{ dept|default:"(none)" }}</td>
@@ -254,7 +252,8 @@
   <p>No pay runs with days in {{ month_label }}.</p>
   {% endfor %}
   <p class="lv-muted">One journal per month a pay run's days fall in; lines by account × department × event, credited to the
-    clearing account. iLA keeps them as overlay journals (Expected) and rebuilds them while they are Expected.
-    iLA never posts to Xero: download the file and import it in Xero (Accounting → Manual journals → Import).</p>
+    clearing account. Until the payroll journal is in Xero, iLA keeps each as a draft overlay journal and keeps it up to
+    date. To change one, or to generate its Xero import file, use the console: <code>/OJ --{{ month_label }}</code>.
+    iLA never posts to Xero.</p>
 {% endif %}
 {% endblock %}

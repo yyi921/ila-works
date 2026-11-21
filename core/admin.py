@@ -320,7 +320,7 @@ class DimensionAdmin(admin.ModelAdmin):
 
 class AdjustmentLineInline(admin.TabularInline):
     model = models.AdjustmentLine
-    fields = ("account_code", "description", "tracking_option1", "tracking_option2", "amount")
+    fields = ("account_code", "description", "tracking_option1", "tracking_option2", "tax_rate", "amount")
     readonly_fields = fields
     extra = 0
     can_delete = False
@@ -331,13 +331,15 @@ class AdjustmentLineInline(admin.TabularInline):
 
 @admin.register(models.Adjustment)
 class AdjustmentAdmin(admin.ModelAdmin):
-    """Overlay journals (ADJ-nnnn): read here; made and changed by the commands and pages that own them."""
+    """The bucket of overlay journals (OJ-nnnn): read here; composed and changed in the console with /OJ. A
+    journal that is in Xero has left the bucket; the audit log keeps what it was."""
 
-    list_display = ("reference", "organisation", "date", "narration", "origin", "status", "debit_total")
-    list_filter = ("organisation", "origin", "status")
+    list_display = ("reference", "organisation", "date", "narration", "status", "maker", "debit_total",
+                    "reverse_date")
+    list_filter = ("organisation", "status", "origin")
     search_fields = ("narration", "evidence")
-    fields = ("organisation", "date", "period_end", "narration", "origin", "origin_ref", "evidence", "status",
-              "made_by", "superseded_by", "note")
+    fields = ("organisation", "date", "period_end", "narration", "status", "made_by", "origin", "origin_ref",
+              "evidence", "reverse_date", "file_revision", "import_file", "version", "note")
     readonly_fields = fields
     inlines = [AdjustmentLineInline]
 
@@ -345,9 +347,16 @@ class AdjustmentAdmin(admin.ModelAdmin):
     def reference(self, obj):
         return obj.reference
 
+    @admin.display(description="Made by")
+    def maker(self, obj):
+        return obj.made_by or f"iLA ({obj.origin})"
+
     @admin.display(description="Debits")
     def debit_total(self, obj):
         return f"{obj.debit_total:,.2f}"
 
     def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False

@@ -963,66 +963,94 @@ class Reconciliation(TenantModel):
 
 # --- Overlay journals -------------------------------------------------------------------------------------------
 
-class Adjustment(TenantModel):
-    """An overlay journal (ADJ-0001): a journal iLA or a person proposes on top of Xero's actuals, e.g. a pay-run
-    journal, an accrual or a reclass. It sits in a bucket until it is in Xero:
+class OverlayCounter(models.Model):
+    """The last overlay journal number given out in an organisation. Numbers are never used again, even after a
+    journal has left the bucket."""
 
-    * **Expected**: an estimate, for review (iLA may rebuild it while it's here);
-    * **To post**: approved, its import file to be built and imported;
-    * **Posted**: found in Xero; it leaves the buckets;
-    * **Superseded**: a journal posted in Xero by someone else covers it; iLA shows the difference;
-    * **Rejected**: kept with its reason.
+    organisation = models.OneToOneField(Organisation, on_delete=models.CASCADE, related_name="+")
+    last = models.PositiveIntegerField(default=0)
+
+
+class Adjustment(TenantModel):
+    """An overlay journal (OJ-0012): the difference between what the accounts should be and what is in Xero. There
+    is one bucket of them, whoever made them (a person in /OJ, or iLA from labour, accruals, …), with two statuses:
+
+    * **Draft**: being worked on. A person's draft is private to them; iLA's drafts (``made_by`` empty) are seen by
+      everyone and kept up to date by iLA.
+    * **To be posted**: its Xero import file has been generated (that is what makes it To be posted). Locked until
+      it's taken back to Draft, which cancels the file.
+
+    Once a journal is in Xero it leaves the bucket (the row is deleted; the audit log keeps the record), so nothing
+    is counted twice. iLA never posts to Xero.
     """
 
     class Status(models.TextChoices):
-        EXPECTED = "expected", "Expected"
-        TO_POST = "to_post", "To post"
-        POSTED = "posted", "Posted"
-        SUPERSEDED = "superseded", "Superseded"
-        REJECTED = "rejected", "Rejected"
+        DRAFT = "draft", "Draft"
+        TO_POST = "to_post", "To be posted"
 
     number = models.PositiveIntegerField(editable=False)
     date = models.DateField(help_text="The journal date.")
     period_end = models.DateField(help_text="Last day of the month it belongs to.")
     narration = models.CharField(max_length=255)
-    origin = models.CharField(max_length=30, help_text="What made it, e.g. labour.")
+    origin = models.CharField(max_length=30, blank=True, help_text="What made it: labour, labour-estimate, … "
+                                                                   "Blank: composed by a person.")
     origin_ref = models.CharField(max_length=100, blank=True, help_text="e.g. the pay run it was built from.")
     evidence = models.CharField(max_length=255, blank=True, help_text="e.g. the pay-run file.")
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.EXPECTED)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     made_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
                                 related_name="+", help_text="Blank: made by iLA.")
-    superseded_by = models.ForeignKey(Journal, null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
-                                      help_text="The journal in Xero that covers it.")
+    reverse_date = models.DateField(null=True, blank=True, help_text="Blank: doesn't reverse.")
+    file_revision = models.PositiveSmallIntegerField(default=0, help_text="Import files generated for it so far.")
+    import_file = models.ForeignKey(ImportFile, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    version = models.PositiveIntegerField(default=0, help_text="The version shown (for undo and redo).")
     note = models.TextField(blank=True)
 
     class Meta(TenantModel.Meta):
         constraints = TenantModel.Meta.constraints + [
             models.UniqueConstraint(fields=["organisation", "number"], name="core_adjustment_number_uniq")]
-        ordering = ["-number"]
+        ordering = ["number"]
         verbose_name = "overlay journal"
 
     def __str__(self):
         return f"{self.reference} {self.narration} ({self.date:%d/%m/%Y})"
 
     @property
-    def reference(self):
-        return f"ADJ-{self.number:04d}"
+    def code(self):
+        """OJ-0012: the part that never changes."""
+        return f"OJ-{self.number:04d}"
 
     @property
-    def is_open(self):
-        """In a bucket (Expected or To post)."""
-        return self.status in (self.Status.EXPECTED, self.Status.TO_POST)
+    def reference(self):
+        """OJ-0012-d while a draft; OJ-0012-p2 once its second import file has been generated."""
+        return f"{self.code}-d" if self.status == self.Status.DRAFT else f"{self.code}-p{self.file_revision}"
+
+    @property
+    def is_draft(self):
+        return self.status == self.Status.DRAFT
+
+    @property
+    def by_ila(self):
+        return self.made_by_id is None
 
     def save(self, *args, **kwargs):
         if not self.number:
-            last = (Adjustment.objects.filter(organisation=self.organisation).order_by("-number")
-                    .values_list("number", flat=True).first())
-            self.number = (last or 0) + 1
+            from django.db import transaction  # noqa: PLC0415
+
+            with transaction.atomic():
+                counter, _ = OverlayCounter.objects.select_for_update().get_or_create(organisation=self.organisation)
+                counter.last += 1
+                counter.save()
+                self.number = counter.last
         super().save(*args, **kwargs)
 
     @property
     def debit_total(self):
         return sum((line.amount for line in self.lines.all() if line.amount > 0), Decimal("0"))
+
+    @property
+    def out_by(self):
+        """Debits less credits: zero when it balances."""
+        return sum((line.amount for line in self.lines.all()), Decimal("0"))
 
 
 class AdjustmentLine(models.Model):
@@ -1034,6 +1062,7 @@ class AdjustmentLine(models.Model):
     account_code = models.CharField(max_length=20)
     description = models.CharField(max_length=255, blank=True)
     amount = models.DecimalField(help_text="Signed: debit positive, credit negative.", **MONEY)
+    tax_rate = models.CharField(max_length=50, blank=True, help_text="Blank: BAS Excluded.")
     tracking_name1 = models.CharField(max_length=100, blank=True)
     tracking_option1 = models.CharField(max_length=100, blank=True)
     tracking_name2 = models.CharField(max_length=100, blank=True)
@@ -1045,3 +1074,19 @@ class AdjustmentLine(models.Model):
 
     def __str__(self):
         return f"{self.account_code} {self.amount}"
+
+
+class AdjustmentVersion(models.Model):
+    """The journal as it stood after a change, for undo, redo and going back to an earlier version."""
+
+    adjustment = models.ForeignKey(Adjustment, on_delete=models.CASCADE, related_name="versions")
+    number = models.PositiveIntegerField()
+    what = models.CharField(max_length=255, blank=True, help_text="The change that made it.")
+    snapshot = models.JSONField()
+    made_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["adjustment", "number"]
+        constraints = [models.UniqueConstraint(fields=["adjustment", "number"], name="core_adjustmentversion_uniq")]

@@ -369,3 +369,25 @@ def test_inv_opens_a_credit_note():
     assert f["Credit used"].value == D("80.00") and f["Credit remaining"].value == D("30.00")
     assert "Due" not in f
     assert table(result).rows[0][0] == "Billing error refund"
+
+
+def test_pl_vs_one_comparison():
+    result = run("/pl --September 2026 --vs ly")
+    assert result.title == "Profit and loss: September 2026 vs last year"
+    assert [c.label for c in table(result).columns] == ["Code", "Account", "Actual", "Last year", "Var $", "Var %"]
+    rows = rows_by_label(table(result), column=1)
+    assert rows["Sales"][2:5] == [D("10000.00"), D("8000.00"), D("2000.00")] and rows["Sales"][5] == D("0.25")
+    assert rows["Net profit"][2:5] == [D("2450.00"), D("1500.00"), D("950.00")]
+
+    result = run("/pl --September 2026 --vs budget")
+    rows = rows_by_label(table(result), column=1)
+    assert [c.label for c in table(result).columns][3] == "Budget"
+    assert rows["Sales"][2:5] == [D("10000.00"), D("12000.00"), D("-2000.00")]
+
+    result = run("/pl --September 2026 --vs lm")
+    assert result.title == "Profit and loss: September 2026 vs august 2026"
+    assert [c.label for c in table(result).columns][3] == "August 2026"
+    with pytest.raises(CommandError, match="one month"):
+        run("/pl --Jul 2026 to Sep 2026 --vs lm")
+    with pytest.raises(CommandError, match="lm .last month."):
+        run("/pl --September 2026 --vs nonsense")

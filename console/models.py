@@ -257,3 +257,67 @@ class ReviewSession(TenantModel):
 
     def __str__(self):
         return f"Review {self.period_end:%b %Y} ({self.get_status_display()})"
+
+
+class OJSession(TenantModel):
+    """A month's overlay journals open in the console (/OJ), so plain input (dr 6345 1200, undo, pl, file) goes to
+    it. ``data`` holds the journal being worked on, what the panels show, the muted journals, and Xero's figures as
+    last read (they stay put until refresh)."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        CLOSED = "closed", "Closed"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    period_end = models.DateField()
+    data = models.JSONField(default=dict, blank=True)
+
+    class Meta(TenantModel.Meta):
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Overlay journals {self.period_end:%b %Y} ({self.get_status_display()})"
+
+
+class OJSettings(TenantModel):
+    """One per organisation: the accounts plain-English journals in /OJ use by default. Filled in from the chart the
+    first time; change them here."""
+
+    accrual_account = models.CharField(max_length=20, blank=True,
+                                       help_text="Credited by \"accrue …\", e.g. 2000 Accruals.")
+    prepayment_account = models.CharField(max_length=20, blank=True,
+                                          help_text="Debited by \"prepay …\", e.g. 1140 Prepayments.")
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.UniqueConstraint(fields=["organisation"], name="console_ojsettings_one_per_org")]
+        verbose_name = verbose_name_plural = "OJ settings"
+
+    def __str__(self):
+        return f"OJ settings: {self.organisation}"
+
+
+class OJMemory(TenantModel):
+    """What a kind of journal looked like once it was right (when its Xero file was generated): the words used to
+    ask for it, its narration and its lines. /OJ's plain English looks here first, so the same accounts and
+    tracking are used the next time. Delete a row to make iLA forget it."""
+
+    key = models.CharField(max_length=255, help_text="The narration, in lower case: one memory per narration.")
+    narration = models.CharField(max_length=255)
+    asked = models.TextField(blank=True, help_text="What was typed to make it, if plain English was used.")
+    lines = models.JSONField(default=list, help_text="Side, account, amount, tracking and tax of each line.")
+    uses = models.PositiveIntegerField(default=1)
+    last_used = models.DateField()
+    made_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                related_name="+")
+
+    class Meta(TenantModel.Meta):
+        constraints = TenantModel.Meta.constraints + [
+            models.UniqueConstraint(fields=["organisation", "key"], name="console_ojmemory_key_uniq")]
+        ordering = ["-last_used", "-uses"]
+        verbose_name = "OJ memory"
+        verbose_name_plural = "OJ memory"
+
+    def __str__(self):
+        return self.narration
