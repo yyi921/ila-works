@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
 
-from .models import CommandReference, CustomCommand, SplitRule, SplitRun, TagRun
+from .models import CommandReference, CustomCommand, OJMemory, OJSettings, SplitRule, SplitRun, TagRun
 
 
 @admin.register(CustomCommand)
@@ -120,3 +120,29 @@ class SplitRunAdmin(admin.ModelAdmin):
     def has_add_permission(self, request):
         return False
 
+
+
+@admin.register(OJSettings)
+class OJSettingsAdmin(admin.ModelAdmin):
+    """The accounts plain-English journals in /OJ use by default."""
+
+    list_display = ("organisation", "accrual_account", "prepayment_account")
+    fields = ("organisation", "accrual_account", "prepayment_account")
+
+
+@admin.register(OJMemory)
+class OJMemoryAdmin(admin.ModelAdmin):
+    """Journals /OJ remembers (kept when their Xero file was generated). Delete one to make iLA forget it."""
+
+    list_display = ("narration", "organisation", "accounts", "uses", "last_used", "made_by")
+    list_filter = ("organisation",)
+    search_fields = ("narration", "asked")
+    fields = ("organisation", "narration", "asked", "lines", "uses", "last_used", "made_by")
+    readonly_fields = ("organisation", "uses", "last_used", "made_by")
+
+    @admin.display(description="Lines")
+    def accounts(self, obj):
+        return "; ".join(f"{line['side']} {line['account']}" for line in obj.lines[:6])
+
+    def has_add_permission(self, request):
+        return False

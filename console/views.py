@@ -49,8 +49,13 @@ def console(request):
     if organisation is not None:
         built = list(CustomCommand.objects.filter(organisation=organisation, is_active=True)
                      .values_list("name", flat=True))
+    resume = ""
+    if organisation is not None and not request.GET.get("cmd"):
+        module, _ = open_dialogue(Context(organisation, request.user, source_factory=source_for,
+                                          session=request.session))
+        resume = "oj" if module is not None and module.__name__.endswith(".oj") else ""
     return render(request, "console/console.html",
-                  {"organisation": organisation, "command_names": sorted(COMMANDS) + built,
+                  {"organisation": organisation, "command_names": sorted(COMMANDS) + built, "resume": resume,
                    "can_build": builder.can_build(request.user), "prefill": request.GET.get("cmd", "")[:200]})
 
 

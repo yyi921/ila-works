@@ -205,7 +205,7 @@ def _review(ctx, period):
         runs.add(run.period_end, run.period_start, amount, "Yes" if in_xero else "Not yet")
     if r.estimate:
         out.add(Note(f"{r.estimate.reference}: {r.estimate.narration}, {r.estimate.evidence}. "
-                     f"{r.estimate.note} Expected; replaced when the pay run arrives."))
+                     f"{r.estimate.note} A draft overlay journal; replaced when the pay run arrives."))
     out.add(Note("Employees and days: Admin → Labour → Labour view. Share labour out by event: "
                  f"/splittag --labour --{period.label}."))
     out.link = reverse("admin:labour_view") + f"?organisation={ctx.organisation.pk}&month={period.start:%Y-%m}"

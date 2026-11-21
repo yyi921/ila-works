@@ -11,7 +11,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | Command | Also | What it does | Usage |
 | --- | --- | --- | --- |
 | `/status` |  | Quick update: cash, revenue, debtors, bills due and bank reconciliation; or a measure against budget and last year. | `/status [--<period>] [--revenue\|--cos\|--gp\|--expenses\|--profit] [--mtd\|--qtd\|--ytd]` |
-| `/pl` | `/p&l`, `/profit` | Profit and loss by account, against budget and last year; or by event (any iLA dimension) with Unassigned and a check against Xero. | `/pl [--<period>] [--mtd\|--qtd\|--ytd] [--by <dimension> \| --<dimension>] [>> file.xlsx]` |
+| `/pl` | `/p&l`, `/profit` | Profit and loss by account, against budget and last year, or against one of last month, last year or budget (--vs), optionally with the overlay journals on top (--landing); or by event (any iLA dimension) with Unassigned and a check against Xero. | `/pl [--<period>] [--mtd\|--qtd\|--ytd] [--vs lm\|ly\|budget] [--landing\|--xero] [--by <dimension> \| --<dimension>] [>> file.xlsx]` |
 | `/bs` | `/balancesheet` | Balance sheet as at a date (default today). | `/bs [--as at <date>] [>> file.xlsx]` |
 | `/tb` |  | Trial balance as at a date (default today). | `/tb [--as at <date>] [>> file.xlsx]` |
 | `/cash` | `/bank` | Bank account balances as at a date (default today). | `/cash [--as at <date>]` |
@@ -20,7 +20,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/bills` |  | Bills due in the next 7 days (or --due <days>), with overdue bills listed first. | `/bills [--due <days>] [--overdue] [>> file.xlsx]` |
 | `/accrue` |  | Month-end accrual review: proposed accruals by source with their evidence; accept, adjust or reject each, then build the journal file. | `/accrue [--<period>] [--read \| --refresh]` |
 | `/review` |  | Month-end P&L review: the P&L by group with GP, COGS, labour, EBITDA and net profit % against last month, last year or budget (MTD or YTD), GL accounts per group (L1), and your review requests; leave notes and sign off by account code, group or RR-01. | `/review [--<period>] [--vs lm\|ly\|budget] [--mtd\|--ytd] [--L0\|--L1] [--<group> ...] [--refresh]` |
-| `/labour` |  | Upload a pay-run file into iLA's labour ledger (checked against its Summary total and the payroll journal in Xero), list the pay runs, or review a month's labour against Xero. Uploading also builds the pay run's journal (ADJ, Expected). | `/labour [<< breakdown.xlsx] [--<period>]` |
+| `/labour` |  | Upload a pay-run file into iLA's labour ledger (checked against its Summary total and the payroll journal in Xero), list the pay runs, or review a month's labour against Xero. Uploading also puts the pay run's journal in the bucket of overlay journals as iLA's draft. | `/labour [<< breakdown.xlsx] [--<period>]` |
 | `/reconcile` | `/recon`, `/rec` | Month-end balance sheet reconciliation: each account's Xero balance against its support, with reconciling items, schedules and preparer/reviewer sign-off. | `/reconcile [<account>] [--<period>] [<< schedule.csv] \| /reconcile --bank \| /reconcile --template` |
 | `/compare` |  | Compare bills, invoices or a P&L measure month by month to spot unusual, new or missing amounts. | `/compare --bill\|--invoice [<number>] [--supplier\|--customer <name or code>] [--account <code or name>] [--by account] [--<period>] [--detail] [--min <amount>]   or   /compare --revenue\|--cos\|--gp\|--expenses\|--profit [--<period>]` |
 | `/inv` | `/invoice`, `/bill` | Show one invoice, bill or credit note by its number. | `/inv <number>` |
@@ -28,6 +28,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | `/dim` | `/dimensions`, `/dims` | What you can tag by: Xero tracking categories (2 active, 4 in all) and iLA's own dimensions (no limit). | `/dim [<name>] [--archived]` |
 | `/tag` |  | Tag invoices, bills, credit notes, bank transactions or journals to a value of an iLA dimension, e.g. events. Preview first; nothing is tagged until you approve. | `/tag --dim <dimension> --invoices\|--bills\|--credits\|--bank\|--journals\|--all --<period> [--desc <text>] [--contact <name>] [--account <code or name>] [--amount <range>] [--xero <category> [<option>]] [--attachment] [--retag] [--to <value>] [--window <days>]` |
 | `/splittag` |  | Split the amounts on chosen GL accounts across a dimension's values (e.g. labour across events) by fixed amounts, percentages or both, from a CSV of named rules or a saved rule. | `/splittag [<< rules.csv] [--<rule name>\|--rule <name>\|--labour] [--<period>] [--gl <accounts>] [--invoices --bills --credits --bank --journals\|--all] [--contact <name>] [--desc <text>] [--template]` |
+| `/OJ` |  | Compose overlay journals for a month (drafts that never go to Xero by themselves) and see the P&L with them on top; generating a journal's Xero import file makes it To be posted. | `/OJ [--<month>] [--refresh]` |
 | `/createTag` |  | Set up a dimension to tag by from a CSV of its values: brand new, or replacing a Xero tracking category so iLA shows names instead of codes. | `/createTag [<name>] [--new] [<< values.csv]` |
 | `/orgs` |  | List your organisations; * marks the one in use. | `/orgs` |
 | `/use` |  | Switch to another organisation. | `/use <name>` |
@@ -59,14 +60,16 @@ Examples:
 
 ### /pl
 
-Profit and loss by account, against budget and last year; or by event (any iLA dimension) with Unassigned and a check against Xero.
+Profit and loss by account, against budget and last year, or against one of last month, last year or budget (--vs), optionally with the overlay journals on top (--landing); or by event (any iLA dimension) with Unassigned and a check against Xero.
 
-Usage: `/pl [--<period>] [--mtd|--qtd|--ytd] [--by <dimension> | --<dimension>] [>> file.xlsx]`
+Usage: `/pl [--<period>] [--mtd|--qtd|--ytd] [--vs lm|ly|budget] [--landing|--xero] [--by <dimension> | --<dimension>] [>> file.xlsx]`
 
 | Parameter | Meaning |
 | --- | --- |
-| `--<period>` | Defaults to this month to date |
+| `--<period>` | Defaults to this month to date (while /OJ is open: the month being composed) |
 | `--mtd --qtd --ytd` | To-date window (pick one) |
+| `--vs lm\|ly\|budget` | Against one comparison: last month, the same period last year or budget, with Var $ and Var %. Without it: budget and last year side by side. |
+| `--landing` | With the overlay journals on top: Xero, To be posted, Draft, After (variances are on After). On by default while /OJ is open; --xero leaves them out. |
 | `--by <dimension>  or  --<dimension>` | A column per value, e.g. --by event or just --event. Xero tracking and iLA tags count together. |
 
 Examples:
@@ -74,6 +77,8 @@ Examples:
 - `/pl`
 - `/pl --September 2026`
 - `/pl --ytd >> pl-ytd.xlsx`
+- `/pl --Oct 2026 --vs lm`
+- `/pl --Oct 2026 --vs budget --landing`
 - `/pl --Jul 2026 to Sep 2026`
 - `/pl --event --Sep 2026`
 - `/pl --by event --FY2027 >> events.xlsx`
@@ -222,7 +227,7 @@ In an open review, refer to lines by account code (`4061`, `6300-6380`), group (
 
 ### /labour
 
-Upload a pay-run file into iLA's labour ledger (checked against its Summary total and the payroll journal in Xero), list the pay runs, or review a month's labour against Xero. Uploading also builds the pay run's journal (ADJ, Expected).
+Upload a pay-run file into iLA's labour ledger (checked against its Summary total and the payroll journal in Xero), list the pay runs, or review a month's labour against Xero. Uploading also puts the pay run's journal in the bucket of overlay journals as iLA's draft.
 
 Usage: `/labour [<< breakdown.xlsx] [--<period>]`
 
@@ -407,6 +412,23 @@ Examples:
 - `/createTag Event`
 - `/createTag Event << events.csv`
 - `/createTag Venue`
+
+### /OJ
+
+Compose overlay journals for a month (drafts that never go to Xero by themselves) and see the P&L with them on top; generating a journal's Xero import file makes it To be posted.
+
+Usage: `/OJ [--<month>] [--refresh]`
+
+| Parameter | Meaning |
+| --- | --- |
+| `--<month>` | The month to work on, e.g. Oct 2026. Without it: the month you had open, else last month. |
+| `--refresh` | Read the month from Xero again. |
+| then, without a slash | new <narration> · dr 6345 1200 fb DYN wages · cr 2350 · 6345 1200 to 2350 · move 500 from 6345 to 6346 · rev · 3 1500 · del 3 · undo · redo · pl · pl lab · bs · why 6345 · list · mute 12 · file · back 12 · done |
+
+Examples:
+
+- `/OJ --Oct 2026`
+- `/OJ`
 
 ### /orgs
 

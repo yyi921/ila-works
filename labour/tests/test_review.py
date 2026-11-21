@@ -17,7 +17,7 @@ def test_stub_days_estimated_from_the_last_pay_runs_then_replaced(labour):
     # 5-18 Oct: 8 days in an event's window (Gala 8-12, Expo 11-15) cost 789.60, 6 days without cost 63.00.
     # 19-31 Oct has no event: 13 days × 10.50.
     estimate = r.estimate
-    assert (estimate.status, estimate.date, estimate.origin) == (Adjustment.Status.EXPECTED, date(2026, 10, 31),
+    assert (estimate.status, estimate.date, estimate.origin) == (Adjustment.Status.DRAFT, date(2026, 10, 31),
                                                                  review.ESTIMATE)
     assert estimate.debit_total == D("136.50") and r.estimate_total == D("136.50")
     assert "Per day with an event 98.70, without 10.50" in estimate.note
@@ -33,5 +33,4 @@ def test_stub_days_estimated_from_the_last_pay_runs_then_replaced(labour):
     ledger.upload(org[0], org[1], "b.xlsx", workbook(rows=rows, summary_total=D("200.00")))
     r = review.month_review(org[0], date(2026, 10, 1), date(2026, 10, 31))
     assert r.stub_days == [] and r.estimate is None
-    estimate.refresh_from_db()
-    assert estimate.status == Adjustment.Status.SUPERSEDED
+    assert not Adjustment.objects.filter(origin=review.ESTIMATE).exists()  # it left the bucket

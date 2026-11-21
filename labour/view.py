@@ -12,7 +12,6 @@ from decimal import ROUND_HALF_UP, Decimal
 from django import forms
 from django.contrib import messages
 from django.core.exceptions import ValidationError
-from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.template.response import TemplateResponse
 from django.urls import reverse
@@ -129,8 +128,6 @@ def labour_view(model_admin, request):
         return redirect(reverse("admin:labour_view") + "?" + urlencode(query) + (
             f"#employee-{request.POST['employee']}" if request.POST.get("employee") else ""))
 
-    if request.GET.get("download"):
-        return _download(request, org)
     m = allocation.month(org, start, end)
     context = {
         **model_admin.admin_site.each_context(request), "title": "Labour view", "opts": model_admin.model._meta,
@@ -267,38 +264,27 @@ def _event_detail(m, value_id, totals):
 
 
 def _journal_tab(runs, month_end, view_total):
-    """Each pay run touching the month: its journals (ADJ, one per month), the ties, the checks and, once the
-    accountant's payroll journal is in Xero, the difference by account and department."""
+    """Each pay run touching the month as journals (one per month it covers), the ties, the checks, where each
+    stands in the bucket of overlay journals and, once the payroll journal is in Xero, the difference by account
+    and department."""
     out, month_total = [], Decimal("0")
     for run in runs:
-        p, adjustments = journal.build(run)
+        p, found = journal.build(run)
+        in_bucket = {a.date: a for a in found}
         rows = []
-        for adj in adjustments:
+        for day in p.dates:
+            lines = [{"account_code": r[0], "description": r[1], "amount": r[2], "tracking_option1": r[4],
+                      "tracking_option2": r[6]} for r in journal.rows(p, day)]
             by_key = {}
-            for line in adj.lines.all():
-                key = (line.account_code, line.tracking_option1)
-                by_key[key] = by_key.get(key, Decimal("0")) + line.amount
-            debit = sum((line.amount for line in adj.lines.all() if line.amount > 0), Decimal("0"))
-            if adj.period_end == month_end:
+            for line in lines:
+                key = (line["account_code"], line["tracking_option1"])
+                by_key[key] = by_key.get(key, Decimal("0")) + line["amount"]
+            debit = sum((line["amount"] for line in lines if line["amount"] > 0), Decimal("0"))
+            if journal.month_end(day) == month_end:
                 month_total += debit
-            rows.append({"adj": adj, "debit": debit, "lines": list(adj.lines.all()),
+            rows.append({"date": day, "adj": in_bucket.get(day), "debit": debit, "lines": lines,
+                         "narration": p.narration(),
                          "summary": [(code, dept, amount) for (code, dept), amount in sorted(by_key.items())]})
         out.append({"run": run, "plan": p, "journals": rows, "ties": p.total() == p.target,
-                    "difference": journal.xero_difference(run, adjustments, p.settings)})
+                    "difference": journal.xero_difference(run, p)})
     return {"runs": out, "month_journal_total": money(month_total), "view_total": view_total}
-
-
-def _download(request, org):
-    run = PayRun.objects.filter(organisation=org, pk=request.GET["download"]).first()
-    if run is None:
-        messages.error(request, "That pay run isn't there any more.")
-        return redirect(reverse("admin:labour_view") + f"?organisation={org.pk}&tab=journal")
-    p, adjustments = journal.build(run)
-    if p.problems:
-        messages.error(request, "The import file can't be built yet: " + " ".join(p.problems))
-        return redirect(reverse("admin:labour_view") + "?" + urlencode(
-            {"organisation": org.pk, "month": f"{run.period_end:%Y-%m}", "tab": "journal"}))
-    response = HttpResponse(journal.import_csv(run, adjustments, p.settings), content_type="text/csv")
-    response["Content-Disposition"] = f'attachment; filename="{journal.file_name(run)}"'
-    journal.log_download(run, request.user, adjustments)
-    return response

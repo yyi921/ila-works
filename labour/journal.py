@@ -1,10 +1,11 @@
 """The pay-run journal: a pay run as Xero manual journals, one per month its days fall in, by GL account ×
 department × event, with the on-costs, credited to the payroll clearing account.
 
-Each month's journal is kept as an overlay journal (core.Adjustment, ADJ-nnnn) made by labour, bucket Expected.
-While it is Expected iLA rebuilds it whenever the pay run, the event dates or the labour changes move. When the
-accountant's own payroll journal for the pay run is found in Xero (narration with FNE and the pay-run end date),
-iLA's journals are Superseded and iLA shows the difference by account and department.
+Each month's journal is kept in the bucket of overlay journals (core.Adjustment, OJ-nnnn) as iLA's draft, and
+rebuilt whenever the pay run, the event dates or the labour changes move. People take it from there in /OJ (their
+own copy, or straight to its import file). When the payroll journal for the pay run is found in Xero (narration
+with FNE and the pay-run end date), iLA's drafts leave the bucket; the Labour view still shows iLA's figures against
+Xero by account and department.
 
 - **Dates.** Days in a month before the pay-run end post on that month's last day; the rest on the pay-run end
   date. FNE 1/11/2026 (19 Oct – 1 Nov): 31/10/2026 and 1/11/2026, both in one file.
@@ -12,8 +13,6 @@ iLA's journals are Superseded and iLA shows the difference by account and depart
   pay-run total and each on-cost to its rate × the pay-run total, as /labour shows them.
 """
 
-import csv
-import io
 from calendar import monthrange
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -22,18 +21,15 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
 
-from core.models import Account, Adjustment, AdjustmentLine, AuditLog
+from core import overlay
+from core.models import Account, Adjustment, AdjustmentLine
 
 from . import allocation
 from .ledger import CENT, NOT_MAPPED, ZERO, department_options, find_xero_journal, settings_for
 
 ORIGIN = "labour"
-COLUMNS = ["*Narration", "*Date", "Description", "*AccountCode", "*TaxRate", "*Amount", "TrackingName1",
-           "TrackingOption1", "TrackingName2", "TrackingOption2"]
-FROZEN = (Adjustment.Status.TO_POST, Adjustment.Status.POSTED, Adjustment.Status.REJECTED)
 
-
-def _month_end(day):
+def month_end(day):
     return day.replace(day=monthrange(day.year, day.month)[1])
 
 
@@ -84,7 +80,7 @@ class Plan:
 
 
 def _journal_date(run, day):
-    end = _month_end(day)
+    end = month_end(day)
     return end if end < run.period_end else run.period_end
 
 
@@ -180,58 +176,61 @@ def _option(value):
 # --- Saving as overlay journals ----------------------------------------------------------------------------------
 
 def journals(run):
-    return Adjustment.objects.filter(organisation=run.organisation, origin=ORIGIN, origin_ref=str(run.pk)) \
-        .prefetch_related("lines").order_by("date", "number")
+    """The bucket's journals for the pay run that everyone sees: iLA's drafts and any To be posted."""
+    return (Adjustment.objects.filter(organisation=run.organisation, origin=ORIGIN, origin_ref=str(run.pk))
+            .exclude(status=Adjustment.Status.DRAFT, made_by__isnull=False)
+            .prefetch_related("lines").order_by("date", "number"))
 
 
-def _rows(p, day):
+def rows(p, day):
     """(account, description, amount, name1, option1, name2, option2, value) for one journal, credit last."""
     settings = p.settings
     event_name = _event_tracking(settings)
-    rows = []
+    out = []
     for line in (x for x in p.lines if x.date == day):
         department = line.department if settings.department_tracking else ""
         option = (_option(line.value) or line.value.code) if line.value else ""
-        rows.append((line.account, p.description(day), line.amount,
-                     settings.department_tracking if department else "", department,
-                     event_name if option else "", option, line.value))
-    rows.append((settings.credit_account or NOT_MAPPED, p.description(day), -p.total(day), "", "", "", "", None))
-    return rows
+        out.append((line.account, p.description(day), line.amount,
+                    settings.department_tracking if department else "", department,
+                    event_name if option else "", option, line.value))
+    out.append((settings.credit_account or NOT_MAPPED, p.description(day), -p.total(day), "", "", "", "", None))
+    return out
 
 
 @transaction.atomic
 def build(run, user=None):
-    """Save the pay run's journals as overlay journals (one per month) and mark them superseded when the
-    accountant's payroll journal is in Xero. Journals already approved, posted or rejected are left alone.
-    Returns (Plan, [Adjustment])."""
+    """Keep the pay run's journals in the bucket as iLA's drafts, one per month, up to date with the allocation.
+    Once the payroll journal for the pay run is in Xero they leave the bucket. A date that someone has made To be
+    posted is theirs: iLA makes no draft for it. Returns (Plan, the journals everyone sees)."""
     settings = settings_for(run.organisation)
     posted = find_xero_journal(run, settings)
     if posted != run.xero_journal:
         run.xero_journal = posted
         run.save(update_fields=["xero_journal", "updated_at"])
     p = plan(run, settings)
-    existing = list(journals(run))
-    if any(a.status in FROZEN for a in existing):
-        return p, existing
-    by_date = {a.date: a for a in existing}
-    status = Adjustment.Status.SUPERSEDED if posted else Adjustment.Status.EXPECTED
-    for day in p.dates:
-        adj = by_date.pop(day, None) or Adjustment(organisation=run.organisation, origin=ORIGIN,
-                                                   origin_ref=str(run.pk), date=day, made_by=user)
-        adj.period_end, adj.narration, adj.evidence = _month_end(day), p.narration()[:255], run.file_name[:255]
-        adj.status, adj.superseded_by = status, posted
-        adj.save()
-        rows = _rows(p, day)
+    mine = {a.date: a for a in journals(run) if a.by_ila and a.is_draft}
+    taken = {a.date for a in journals(run) if not a.is_draft}
+    wanted = [] if posted else [day for day in p.dates if day not in taken]
+    for day in wanted:
+        adj = mine.pop(day, None) or Adjustment(organisation=run.organisation, origin=ORIGIN,
+                                                origin_ref=str(run.pk), date=day)
+        head = (month_end(day), p.narration()[:255], run.file_name[:255])
+        if not adj.pk or (adj.period_end, adj.narration, adj.evidence) != head:
+            adj.period_end, adj.narration, adj.evidence = head
+            adj.save()
+        want = rows(p, day)
         have = [(l.account_code, l.description, l.amount, l.tracking_name1, l.tracking_option1, l.tracking_name2,
                  l.tracking_option2, l.value_id) for l in adj.lines.all()]
-        if have != [r[:7] + (r[7].pk if r[7] else None,) for r in rows]:
+        if have != [r[:7] + (r[7].pk if r[7] else None,) for r in want]:
             adj.lines.all().delete()
             AdjustmentLine.objects.bulk_create(
                 AdjustmentLine(adjustment=adj, line_number=i, account_code=r[0], description=r[1][:255],
-                               amount=r[2], tracking_name1=r[3], tracking_option1=r[4], tracking_name2=r[5],
-                               tracking_option2=r[6], value=r[7]) for i, r in enumerate(rows, 1))
-    for stale in by_date.values():
-        stale.delete()
+                               amount=r[2], tax_rate=settings.tax_rate, tracking_name1=r[3], tracking_option1=r[4],
+                               tracking_name2=r[5], tracking_option2=r[6], value=r[7])
+                for i, r in enumerate(want, 1))
+    for stale in mine.values():
+        overlay.leave(stale, user, f"the payroll journal is in Xero ({posted.narration.strip()})" if posted
+                      else "the pay run no longer has days on this date")
     return p, list(journals(run))
 
 
@@ -243,44 +242,18 @@ def rebuild_touching(org, start, end):
         build(run)
 
 
-# --- The import file and the comparison with Xero ----------------------------------------------------------------
+# --- The comparison with Xero --------------------------------------------------------------------------------------
 
-def import_csv(run, adjustments, settings=None):
-    """The Xero manual-journal import file for the pay run's journals."""
-    settings = settings or settings_for(run.organisation)
-    out = io.StringIO()
-    writer = csv.writer(out)
-    writer.writerow(COLUMNS)
-    for adj in adjustments:
-        for line in adj.lines.all():
-            writer.writerow([adj.narration, f"{adj.date:%d/%m/%Y}", line.description, line.account_code,
-                             settings.tax_rate, f"{line.amount:.2f}", line.tracking_name1, line.tracking_option1,
-                             line.tracking_name2, line.tracking_option2])
-    return out.getvalue().encode("utf-8")
-
-
-def file_name(run):
-    return f"Pay-run journal {run.period_end:%Y-%m-%d}.csv"
-
-
-def log_download(run, user, adjustments):
-    AuditLog.objects.create(organisation=run.organisation, user=user, action=AuditLog.Action.DOWNLOAD,
-                            input=f"labour journal {file_name(run)}", target_type="labour.payrun",
-                            target_id=str(run.pk), result={"journals": [a.reference for a in adjustments]})
-
-
-def xero_difference(run, adjustments, settings=None):
-    """[(account, department, iLA, Xero, difference)] between iLA's journals for the pay run and the payroll
+def xero_difference(run, p):
+    """[(account, department, iLA, Xero, difference)] between iLA's journal for the pay run and the payroll
     journal posted in Xero, the credit account left out; None when it isn't in Xero."""
-    settings = settings or settings_for(run.organisation)
+    settings = p.settings
     journal = run.xero_journal
     if journal is None:
         return None
     ila, xero = defaultdict(lambda: ZERO), defaultdict(lambda: ZERO)
-    for adj in adjustments:
-        for line in adj.lines.all():
-            if line.account_code != settings.credit_account:
-                ila[(line.account_code, line.tracking_option1)] += line.amount
+    for line in p.lines:
+        ila[(line.account, line.department if settings.department_tracking else "")] += line.amount
     category = (settings.department_tracking or "").lower()
     for line in journal.lines.select_related("account").prefetch_related("tracking__category"):
         if line.account.code == settings.credit_account:
@@ -289,16 +262,17 @@ def xero_difference(run, adjustments, settings=None):
         xero[(line.account.code, department)] += line.amount
     names = dict(Account.objects.filter(organisation=run.organisation, code__in={k[0] for k in ila | xero})
                  .values_list("code", "name"))
-    rows = [(f"{code} {names.get(code, '')}".strip(), department, ila.get((code, department), ZERO),
-             xero.get((code, department), ZERO), ila.get((code, department), ZERO) - xero.get((code, department), ZERO))
-            for code, department in sorted(set(ila) | set(xero))]
-    return [r for r in rows if r[2] or r[3]]
+    found = [(f"{code} {names.get(code, '')}".strip(), department, ila.get((code, department), ZERO),
+              xero.get((code, department), ZERO), ila.get((code, department), ZERO) - xero.get((code, department), ZERO))
+             for code, department in sorted(set(ila) | set(xero))]
+    return [r for r in found if r[2] or r[3]]
 
 
 def upload_notes(run, user=None):
-    """(summary, problems) after an upload: the pay run's journals and what stops the import file."""
-    p, adjustments = build(run, user)
-    status = adjustments[0].get_status_display() if adjustments else ""
-    text = "Pay-run journal: " + ", ".join(f"{a.reference} {a.date:%d/%m/%Y} {a.debit_total:,.2f}"
-                                           for a in adjustments) + f" ({status}; see Labour view → Journal)."
+    """(summary, problems) after an upload: the pay run's journals and what stops their import file."""
+    p, found = build(run, user)
+    if run.xero_journal_id:
+        return "The payroll journal for this pay run is in Xero, so iLA keeps no overlay journal for it.", []
+    text = "Overlay journals: " + ", ".join(f"{a.reference} {a.date:%d/%m/%Y} {a.debit_total:,.2f}"
+                                           for a in found) + f". Work on them with /OJ --{run.period_end:%b %Y}."
     return text, p.problems
