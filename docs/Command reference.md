@@ -11,7 +11,7 @@ Every command starts with `/`. Parameters follow `--` in any order and may conta
 | Command | Also | What it does | Usage |
 | --- | --- | --- | --- |
 | `/status` |  | Quick update: cash, revenue, debtors, bills due and bank reconciliation; or a measure against budget and last year. | `/status [--<period>] [--revenue\|--cos\|--gp\|--expenses\|--profit] [--mtd\|--qtd\|--ytd]` |
-| `/pl` | `/p&l`, `/profit` | Profit and loss by account, against budget and last year, or against one of last month, last year or budget (--vs), optionally with the overlay journals on top (--landing); or by event (any iLA dimension) with Unassigned and a check against Xero. | `/pl [--<period>] [--mtd\|--qtd\|--ytd] [--vs lm\|ly\|budget] [--landing\|--xero] [--by <dimension> \| --<dimension>] [>> file.xlsx]` |
+| `/pl` | `/p&l`, `/profit` | Profit and loss by account, against budget and last year, or against one of last month, last year or budget (--vs), optionally with the overlay journals on top (--landing); or by event (any iLA dimension) with Unassigned and a check against Xero, by account or by review group (--L0). | `/pl [--<period>] [--mtd\|--qtd\|--ytd] [--vs lm\|ly\|budget] [--landing\|--xero] [--by <dimension> \| --<dimension>] [--L0\|--L1] [--<group> ...] [>> file.xlsx]` |
 | `/bs` | `/balancesheet` | Balance sheet as at a date (default today). | `/bs [--as at <date>] [>> file.xlsx]` |
 | `/tb` |  | Trial balance as at a date (default today). | `/tb [--as at <date>] [>> file.xlsx]` |
 | `/cash` | `/bank` | Bank account balances as at a date (default today). | `/cash [--as at <date>]` |
@@ -60,9 +60,9 @@ Examples:
 
 ### /pl
 
-Profit and loss by account, against budget and last year, or against one of last month, last year or budget (--vs), optionally with the overlay journals on top (--landing); or by event (any iLA dimension) with Unassigned and a check against Xero.
+Profit and loss by account, against budget and last year, or against one of last month, last year or budget (--vs), optionally with the overlay journals on top (--landing); or by event (any iLA dimension) with Unassigned and a check against Xero, by account or by review group (--L0).
 
-Usage: `/pl [--<period>] [--mtd|--qtd|--ytd] [--vs lm|ly|budget] [--landing|--xero] [--by <dimension> | --<dimension>] [>> file.xlsx]`
+Usage: `/pl [--<period>] [--mtd|--qtd|--ytd] [--vs lm|ly|budget] [--landing|--xero] [--by <dimension> | --<dimension>] [--L0|--L1] [--<group> ...] [>> file.xlsx]`
 
 | Parameter | Meaning |
 | --- | --- |
@@ -71,6 +71,8 @@ Usage: `/pl [--<period>] [--mtd|--qtd|--ytd] [--vs lm|ly|budget] [--landing|--xe
 | `--vs lm\|ly\|budget` | Against one comparison: last month, the same period last year or budget, with Var $ and Var %. Without it: budget and last year side by side. |
 | `--landing` | With the overlay journals on top: Xero, To be posted, Draft, After (variances are on After). On by default while /OJ is open; --xero leaves them out. |
 | `--by <dimension>  or  --<dimension>` | A column per value, e.g. --by event or just --event. Xero tracking and iLA tags count together. |
+| `--L0 / --L1` | With a dimension. L0: one row per review group (Revenue, Cost of sales, Labour, Other operating costs...) with Gross profit, EBITDA, Net profit and the review's ratios, per event. L1: the GL accounts in each group. |
+| `--<group>` | With a dimension: only these groups' GL accounts (L1): rev, cogs, oth, lab, opx, da, int, tax |
 
 Examples:
 
@@ -81,6 +83,8 @@ Examples:
 - `/pl --Oct 2026 --vs budget --landing`
 - `/pl --Jul 2026 to Sep 2026`
 - `/pl --event --Sep 2026`
+- `/pl --event --Oct 2026 --L0`
+- `/pl --event --Oct 2026 --L1 --lab`
 - `/pl --by event --FY2027 >> events.xlsx`
 
 ### /bs

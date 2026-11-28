@@ -228,9 +228,9 @@ def _budget_missing_reason(src):
     "pl",
     summary="Profit and loss by account, against budget and last year, or against one of last month, last year "
             "or budget (--vs), optionally with the overlay journals on top (--landing); or by event (any iLA "
-            "dimension) with Unassigned and a check against Xero.",
+            "dimension) with Unassigned and a check against Xero, by account or by review group (--L0).",
     usage="/pl [--<period>] [--mtd|--qtd|--ytd] [--vs lm|ly|budget] [--landing|--xero] "
-          "[--by <dimension> | --<dimension>] [>> file.xlsx]",
+          "[--by <dimension> | --<dimension>] [--L0|--L1] [--<group> ...] [>> file.xlsx]",
     params=[("--<period>", "Defaults to this month to date (while /OJ is open: the month being composed)"),
             ("--mtd --qtd --ytd", "To-date window (pick one)"),
             ("--vs lm|ly|budget", "Against one comparison: last month, the same period last year or budget, with "
@@ -238,9 +238,15 @@ def _budget_missing_reason(src):
             ("--landing", "With the overlay journals on top: Xero, To be posted, Draft, After (variances are on "
                           "After). On by default while /OJ is open; --xero leaves them out."),
             ("--by <dimension>  or  --<dimension>", "A column per value, e.g. --by event or just --event. Xero "
-                                                    "tracking and iLA tags count together.")],
+                                                    "tracking and iLA tags count together."),
+            ("--L0 / --L1", "With a dimension. L0: one row per review group (Revenue, Cost of sales, Labour, "
+                            "Other operating costs...) with Gross profit, EBITDA, Net profit and the review's "
+                            "ratios, per event. L1: the GL accounts in each group."),
+            ("--<group>", "With a dimension: only these groups' GL accounts (L1): rev, cogs, oth, lab, opx, da, "
+                          "int, tax")],
     examples=["/pl", "/pl --September 2026", "/pl --ytd >> pl-ytd.xlsx", "/pl --Jul 2026 to Sep 2026",
-              "/pl --event --Sep 2026", "/pl --by event --FY2027 >> events.xlsx", "/pl --Oct 2026 --vs lm",
+              "/pl --event --Sep 2026", "/pl --event --Oct 2026 --L0", "/pl --event --Oct 2026 --L1 --lab",
+              "/pl --by event --FY2027 >> events.xlsx", "/pl --Oct 2026 --vs lm",
               "/pl --Oct 2026 --vs budget --landing"],
     aliases=("p&l", "profit"),
 )
@@ -264,11 +270,17 @@ def pl(ctx, cmd):
         cmd.text = ""
     from . import pl_view
 
-    own = set(WINDOWS) | {"landing", "xero"}
+    from review.checks import GROUPS
+
+    own = set(WINDOWS) | {"landing", "xero", "l0", "l1"} | set(GROUPS)
     params = read_params(cmd, ctx, flags=own | (set(dimensions) - own), period=True,
-                         exclusive=[WINDOWS, ("landing", "xero")],
+                         exclusive=[WINDOWS, ("landing", "xero"), ("l0", "l1")],
                          keyed={"by": lambda value, _: value.strip(), "vs": pl_view.read_vs})
-    chosen = [dimensions[f] for f in params.flags if f in dimensions]
+    chosen = [dimensions[f] for f in params.flags if f in dimensions and f not in own]
+    focus = [group for group in GROUPS if group in params.flags]
+    if "l0" in params.flags and focus:
+        raise CommandError("Naming a group opens its GL accounts (L1); leave out --L0.")
+    level = 0 if "l0" in params.flags else 1 if focus or "l1" in params.flags else None
     if "by" in params.values:
         wanted = params.values["by"].lower()
         if wanted not in dimensions:
@@ -295,7 +307,10 @@ def pl(ctx, cmd):
             raise CommandError("By event doesn't take --vs or --landing yet: leave one of them out.")
         from .pl_by_dimension import report
 
-        return report(ctx, chosen[0], period)
+        return report(ctx, chosen[0], period, level=level, focus=focus)
+    if level is not None:
+        raise CommandError("--L0, --L1 and group names go with a dimension, e.g. /pl --event --Oct 2026 --L0. For "
+                           "the whole organisation by group, use /review.")
     if vs or landing:
         return pl_view.report(ctx, period, vs, landing)
     src = ctx.source

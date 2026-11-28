@@ -4,7 +4,7 @@ A practical guide to the iLA console: what each command is for, how to type it, 
 full list of parameters with examples, see [Command reference](Command%20reference.md), or type `/help <command>` in
 the console.
 
-_Last updated: 14 November 2026 (`/labour`: pay runs from the Micropay file into iLA's labour ledger, checked against Xero; event dates on each event, with suggested dates)._
+_Last updated: 28 November 2026 (`/pl --event --L0`: the P&L by event at a high level, by review group with Gross profit, EBITDA, Net profit and the ratios)._
 
 ---
 
@@ -75,6 +75,8 @@ Quarters and financial years follow the year end set in Xero.
 | See revenue for a month against budget and last year | `/status --September 2026 --revenue --mtd` |
 | Prepare a P&L for the month-end pack | `/pl --last month >> pl.xlsx` |
 | See profit by event | `/pl --event --Sep 2026` (or `/pl --by event`) |
+| Review the P&L by event at a high level (Revenue, Cost of sales, Labour, EBITDA, ratios) | `/pl --event --Oct 2026 --L0` |
+| See the GL accounts behind one group by event | `/pl --event --Oct 2026 --L1 --lab` |
 | Share a month's labour across events by its pay runs | `/splittag --labour --Oct 2026`, then `approve` |
 | Review a month's labour against Xero | `/labour --Oct 2026` |
 | Split amounts across events by your own rules | `/splittag --Sep 2026 << rules.csv`, then `approve` |
@@ -126,7 +128,7 @@ Quarters and financial years follow the year end set in Xero.
 
 #### `/pl` (`/p&l`, `/profit`) — profit and loss
 - **Purpose:** P&L by account against budget and last year.
-- **Syntax:** `/pl [--<period>] [--mtd|--qtd|--ytd] [--vs lm|ly|budget] [--landing|--xero] [--by <dimension> | --<dimension>] [>> file.xlsx]`
+- **Syntax:** `/pl [--<period>] [--mtd|--qtd|--ytd] [--vs lm|ly|budget] [--landing|--xero] [--by <dimension> | --<dimension>] [--L0|--L1] [--<group> ...] [>> file.xlsx]`
 - **Use it:** defaults to this month to date. `/pl --ytd >> pl-ytd.xlsx` for a pack.
 - **Against one comparison:** `/pl --Oct 2026 --vs lm` (last month), `--vs ly` (the same period last year) or
   `--vs budget` gives Actual, the comparison, **Var $** (actual less the comparison) and **Var %**. `--vs lm` needs
@@ -139,6 +141,25 @@ Quarters and financial years follow the year end set in Xero.
   journal command) brings it back.
 - **By event:** `/pl --event --Sep 2026` (or `/pl --by event`, or any other iLA dimension) gives the P&L
   with a column per event, then **Unassigned**, **Total in iLA**, **Xero P&L** and **Difference**.
+  - **High level, by group (`--L0`):** `/pl --event --Oct 2026 --L0` gives one row per review group instead of
+    every account, with the same columns:
+
+    | Ref | Line |
+    | --- | --- |
+    | `rev` · `cogs` | Revenue · Cost of sales |
+    | | Gross profit |
+    | `oth` · `lab` · `opx` | Other income · Labour · Other operating costs |
+    | | EBITDA |
+    | `da` · `int` · `tax` | Depreciation & amortisation · Interest · Income tax |
+    | | Net profit |
+    | | The ratios, per event: Gross profit %, COGS %, Labour %, EBITDA %, Net profit % |
+
+    The groups, the labour accounts and the ratios are the ones `/review` uses (Admin → Review → Review
+    settings), so **Xero P&L** here ties to `/review` for the same month. An event with no revenue has no ratios.
+  - **The accounts behind a group (`--L1`):** `/pl --event --Oct 2026 --L1` lists the GL accounts under each
+    group; name groups to see only theirs, e.g. `--L1 --lab` or `--rev --cogs`.
+  - **Labour by event** shows against events only for months where you ran `/splittag --labour` and approved;
+    until then it's all under Unassigned, and the report says so.
   - **Every tag counts once:** Xero's own Event tracking and the tags you approved in `/tag` are one set.
     Where both exist on the same transaction, your iLA tag wins.
   - iLA first reads the period's transactions from Xero, so anything tagged in Xero since is included.
@@ -950,6 +971,7 @@ Planned, not built yet:
 
 | Date | Change |
 | --- | --- |
+| 28 Nov 2026 | `/pl --event --L0`: the P&L by event by review group (Revenue, Cost of sales, Gross profit, Other income, Labour, Other operating costs, EBITDA, Net profit) with the review's ratios per event; `--L1` (or a group, e.g. `--lab`) lists the GL accounts in each group. |
 | 14 Nov 2026 | `/pl` reads a period typed without dashes (`/pl Oct 26 --by event`); anything else typed there (e.g. `/pl oc 26`) is an error instead of being ignored, which used to show this month to date. |
 | 21 Nov 2026 | **Plain English in `/OJ`**: say "accrue audit fee for another 1200" or "change the GL 6345 to 6400" and iLA turns it into journal commands with the language model. Accrue credits and prepay debits the accounts in Admin → Console → OJ settings. iLA remembers each journal whose file you generate (OJ memory) and reuses its accounts next time. |
 | 21 Nov 2026 | `/pl --vs lm|ly|budget` compares the P&L with one of last month, last year or budget (Var $ and Var %); `--landing` puts the overlay journals on top (Xero · To be posted · Draft · After). While `/OJ` is open, `/pl` uses the month being composed with the journals on top. |

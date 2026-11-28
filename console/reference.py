@@ -11,7 +11,9 @@ HOW_TO = {
     "pl": "Profit and loss by account against budget and last year. Default is this month; give a period or "
           "--ytd. Add >> pl.xlsx to save it for a pack. "
           "/pl --event (or --by <dimension>) gives a column per event, Unassigned, and a check against Xero; Xero "
-          "tracking and tags approved in /tag count together.",
+          "tracking and tags approved in /tag count together. Add --L0 for the high-level view: one row per "
+          "review group (Revenue, Cost of sales, Labour, Other operating costs) with Gross profit, EBITDA, Net "
+          "profit and the ratios per event; --L1 for the GL accounts in each group.",
     "bs": "Balance sheet as at today, or --as at 30/06/2026 for a month or year end.",
     "tb": "Trial balance for tie-outs and audit files, as at today or --as at a date. Save with >> tb.xlsx.",
     "cash": "Bank balances now or as at a date. Quick check before a payment run.",
