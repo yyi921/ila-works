@@ -324,3 +324,34 @@ def test_pl_by_event_combines_xero_tracking_and_ila_tags_and_ties_to_xero(client
     assert say(client, "/pl --by Event --Mar 2026")["title"] == "Profit and loss by Event: March 2026"
     assert "Use two dashes: /pl --event" in error(client, "/pl -event")
     assert 'No iLA dimension called "venue"' in error(client, "/pl --by venue")
+
+    # --L0: the same amounts by review group, with the review's subtotals and ratios per event
+    result = say(client, "/pl --event --Mar 2026 to Apr 2026 --L0")
+    table = next(b for b in result["blocks"] if b["type"] == "table")
+    assert [c["label"] for c in table["columns"]][:2] + [c["label"] for c in table["columns"]][-4:] == [
+        "Ref", "Line", "Unassigned", "Total in iLA", "Xero P&L", "Difference"]
+    assert [r["cells"][1] for r in table["rows"]] == [
+        "Revenue", "Cost of sales", "Gross profit", "Labour", "Other operating costs", "EBITDA", "Net profit",
+        "Gross profit %", "COGS %", "Labour %", "EBITDA %", "Net profit %"]
+    rows = {r["cells"][1]: r["cells"][2:] for r in table["rows"]}
+    assert rows["Revenue"] == ["5,000.00", "2,000.00", "0.00", "0.00", "7,000.00", "7,000.00", "0.00"]
+    assert rows["Gross profit"] == ["5,000.00", "200.00", "0.00", "(450.00)", "4,750.00", "4,750.00", "0.00"]
+    assert rows["Labour"] == ["0.00", "0.00", "0.00", "0.00", "0.00", "1,234.00", "1,234.00"]  # Wages, by its name
+    assert rows["Other operating costs"] == ["0.00", "150.00", "150.00", "640.00", "940.00", "940.00", "0.00"]
+    assert rows["EBITDA"] == ["5,000.00", "50.00", "(150.00)", "(1,090.00)", "3,810.00", "2,576.00", "(1,234.00)"]
+    assert rows["Net profit"] == rows["EBITDA"]
+    assert rows["Gross profit %"] == ["100.0%", "10.0%", "", "", "67.9%", "67.9%", ""]  # no revenue: no ratio
+    assert rows["Labour %"][-3:] == ["0.0%", "17.6%", ""]
+    assert "Groups: Cost of sales: 310" in notes(result) and "Labour % = lab / rev" in notes(result)
+
+    # --L1: the accounts under each group; naming a group shows only that group's
+    table = next(b for b in say(client, "/pl --event --Mar 2026 to Apr 2026 --L1")["blocks"] if b["type"] == "table")
+    assert [r["cells"][1] for r in table["rows"]] == [
+        "Revenue", "Sales", "Total revenue", "Cost of sales", "Cost of Goods Sold", "Total cost of sales",
+        "Gross profit", "Labour", "Wages", "Total labour", "Other operating costs", "Consulting",
+        "Light, Power, Heating", "Total other operating costs", "EBITDA", "Net profit"]
+    table = next(b for b in say(client, "/pl --event --Mar 2026 to Apr 2026 --opx")["blocks"] if b["type"] == "table")
+    assert [r["cells"][1] for r in table["rows"]] == [
+        "Other operating costs", "Consulting", "Light, Power, Heating", "Total other operating costs"]
+    assert "leave out --L0" in error(client, "/pl --event --Mar 2026 --L0 --lab")
+    assert "go with a dimension" in error(client, "/pl --Mar 2026 --L0")

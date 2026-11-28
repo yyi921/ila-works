@@ -1,5 +1,7 @@
 """``/pl --by event`` (or ``/pl --event``): profit and loss with a column per value of an iLA dimension, plus
-Unassigned, iLA's total, Xero's P&L and the difference.
+Unassigned, iLA's total, Xero's P&L and the difference. ``--L0`` gives one row per review group (Revenue, Cost of
+sales, Labour, Other operating costs...) with Gross profit, EBITDA, Net profit and the review's ratios, per value;
+``--L1`` the GL accounts under each group.
 
 Tags come from one place: iLA's live tags, which already combine Xero tracking (copied in as tracking tags for a
 dimension that replaces a Xero category) with the tags approved in iLA (which win over Xero's tracking). Before
@@ -27,6 +29,7 @@ from core.models import (
     Tag,
 )
 from core.tagging import split_amount
+from review import checks as engine
 from xero.source import CATEGORY_OF_TYPE, INCOME_CATEGORIES
 from xero.sync import KINDS, copy_period
 
@@ -115,7 +118,24 @@ def _tags(organisation, dimension):
     return tags
 
 
-def report(ctx, dimension, period):
+@dataclass
+class Gathered:
+    """The period's amounts by account and dimension value, with Xero's P&L beside them."""
+
+    accounts: dict  # account pk -> Account
+    categories: dict  # account pk -> P&L category
+    cells: dict  # (account pk, value pk or None) -> amount
+    xero_amounts: dict  # account pk -> amount in Xero's P&L
+    unattributed: Decimal  # Xero's net profit not on any account row
+    values: list  # the dimension's values with amounts, in column order
+    columns: list  # value pks, then UNASSIGNED
+    copied: object
+
+    def row(self, account_id):
+        return [self.cells.get((account_id, c), ZERO) for c in self.columns]
+
+
+def _gather(ctx, dimension, period):
     org = ctx.organisation
     copied = copy_period(org, ctx.source, KINDS, period.start, period.end)
     xero = ctx.source.profit_and_loss(period.start, period.end)
@@ -148,64 +168,52 @@ def report(ctx, dimension, period):
 
     used = {value_id for (_, value_id), amount in cells.items() if value_id is not UNASSIGNED and amount}
     values = sorted(dimension.values.filter(pk__in=used), key=lambda v: (_start(v, dimension), v.code.lower()))
-    columns = [v.pk for v in values] + [UNASSIGNED]
+    return Gathered(accounts, categories, cells, xero_amounts, xero.unattributed, values,
+                    [v.pk for v in values] + [UNASSIGNED], copied)
 
+
+def _value_columns(g):
+    return ([Column(f"{v.code} {v.name}" if v.name != v.code else v.code, MONEY) for v in g.values]
+            + [Column("Unassigned", MONEY), Column("Total in iLA", MONEY), Column("Xero P&L", MONEY),
+               Column("Difference", MONEY)])
+
+
+def report(ctx, dimension, period, *, level=None, focus=()):
+    """``level`` None: every account under Xero's four sections. 0: one row per review group (Revenue, Cost of
+    sales, Labour...) with Gross profit, EBITDA, Net profit and the review's ratios. 1: the accounts under each
+    review group, or only under the groups in ``focus``."""
+    g = _gather(ctx, dimension, period)
+    by_group = level is not None
     result = Result(f"Profit and loss by {dimension.name}: {period.label}",
-                    subtitle="iLA tags (Xero tracking included) · checked against Xero's P&L")
-    table = Table([Column("Code"), Column("Account")]
-                  + [Column(f"{v.code} {v.name}" if v.name != v.code else v.code, MONEY) for v in values]
-                  + [Column("Unassigned", MONEY), Column("Total in iLA", MONEY), Column("Xero P&L", MONEY),
-                     Column("Difference", MONEY)])
-    totals = {}
-    for category, title in SECTIONS:
-        ids = sorted((a for a, c in categories.items() if c == category),
-                     key=lambda a: (accounts[a].code, accounts[a].name))
-        if not ids:
-            continue
-        table.add("", title, *([None] * (len(columns) + 3)), total=True)
-        section = defaultdict(lambda: ZERO)
-        for account_id in ids:
-            row = [cells.get((account_id, c), ZERO) for c in columns]
-            ila, xer = sum(row, ZERO), xero_amounts.get(account_id, ZERO)
-            if not any(row) and not xer:
-                continue
-            for c, amount in zip(columns, row):
-                section[c] += amount
-            section["ila"] += ila
-            section["xero"] += xer
-            account = accounts[account_id]
-            table.add(account.code, account.name, *row, ila, xer, xer - ila)
-        totals[category] = section
-        _total_row(table, f"Total {title.lower()}", columns, section)
-        if category == "cost_of_sales":
-            _total_row(table, "Gross profit", columns, _combine(totals, ["revenue"], ["cost_of_sales"], columns))
-    net = _combine(totals, list(INCOME_CATEGORIES), ["cost_of_sales", "expenses"], columns)
-    other = xero.unattributed
-    if other:
-        table.add("", "Other items in Xero not linked to an account, e.g. currency gains (losses)",
-                  *([ZERO] * len(columns)), ZERO, other, other)
-        net["xero"] += other
-    _total_row(table, "Net profit", columns, net)
+                    subtitle=("By group, as in /review · " if level == 0 else "GL accounts by group · " if by_group
+                              else "") + "iLA tags (Xero tracking included) · checked against Xero's P&L")
+    lines = _review_lines(ctx, g) if by_group else None
+    table = _by_account(g) if not by_group else _l0(ctx, g, lines) if level == 0 else _l1(g, lines, focus)
 
-    income = sum((totals.get(c, {}).get("ila", ZERO) for c in INCOME_CATEGORIES), ZERO)
-    income_tagged = income - sum((totals.get(c, {}).get(UNASSIGNED, ZERO) for c in INCOME_CATEGORIES), ZERO)
-    costs = sum((totals.get(c, {}).get("ila", ZERO) for c in ("cost_of_sales", "expenses")), ZERO)
-    costs_tagged = costs - sum((totals.get(c, {}).get(UNASSIGNED, ZERO) for c in ("cost_of_sales", "expenses")),
-                               ZERO)
-    difference = net["xero"] - net["ila"]
+    income = costs = income_open = costs_open = net_xero = ZERO
+    for account_id, category in g.categories.items():
+        sign = 1 if category in INCOME_CATEGORIES else -1
+        total, unassigned = sum(g.row(account_id), ZERO), g.cells.get((account_id, UNASSIGNED), ZERO)
+        if sign > 0:
+            income, income_open = income + total, income_open + unassigned
+        else:
+            costs, costs_open = costs + total, costs_open + unassigned
+        net_xero += sign * g.xero_amounts.get(account_id, ZERO)
+    net_xero += g.unattributed
+    difference = net_xero - (income - costs)
     result.add(Figures([
-        Figure(f"{dimension.name} values with amounts", str(len(values)), TEXT),
-        Figure("Income tagged", income_tagged / income if income else None, PCT,
+        Figure(f"{dimension.name} values with amounts", str(len(g.values)), TEXT),
+        Figure("Income tagged", (income - income_open) / income if income else None, PCT,
                detail="of income in iLA's copy"),
-        Figure("Costs tagged", costs_tagged / costs if costs else None, PCT, detail="of costs in iLA's copy"),
-        Figure("Net profit (Xero)", net["xero"], MONEY),
+        Figure("Costs tagged", (costs - costs_open) / costs if costs else None, PCT, detail="of costs in iLA's copy"),
+        Figure("Net profit (Xero)", net_xero, MONEY),
         Figure("Difference to Xero", difference, MONEY,
                detail="Ties to Xero" if not difference else "Transactions iLA doesn't read yet"),
     ]))
     result.add(table)
     if difference:
-        gaps = sorted(((accounts[a], xero_amounts.get(a, ZERO) - sum((cells.get((a, c), ZERO) for c in columns),
-                                                                      ZERO)) for a in accounts), key=lambda p: -abs(p[1]))
+        gaps = sorted(((g.accounts[a], g.xero_amounts.get(a, ZERO) - sum(g.row(a), ZERO)) for a in g.accounts),
+                      key=lambda p: -abs(p[1]))
         gaps = [f"{acc.code} {acc.name} {gap:,.2f}".strip() for acc, gap in gaps if gap][:6]
         result.add(Note("The Difference column is what's in Xero's P&L but not in the transactions iLA reads "
                         "(invoices, bills, credit notes, bank transactions and manual journals): usually payroll, "
@@ -213,10 +221,155 @@ def report(ctx, dimension, period):
                         "be split by " + dimension.name.lower() + " yet. Largest: " + "; ".join(gaps) + "."))
     for pending in _pending(ctx, dimension, period):
         result.add(Note(pending, "warning"))
-    result.add(Note(f"Read from Xero first: {copied.added} new, {copied.updated} changed and {copied.unchanged} "
-                    f"unchanged transaction(s). Unassigned is what isn't tagged to any {dimension.name.lower()}; "
-                    f"tag it with /tag --dim {dimension.code} --all --{period.label}."))
+    if by_group:
+        labour = [line for line in lines if line.group == "lab"]
+        if any(line.values["ila"] for line in labour) and not any(line.values[v.pk] for line in labour
+                                                                   for v in g.values):
+            result.add(Note(f"Labour isn't shared across any {dimension.name.lower()} for this period, so it's all "
+                            "under Unassigned. Share each month's with /splittag --labour --<month>, then approve.",
+                            "warning"))
+    if level == 0:
+        from review.models import ReviewSettings
+
+        settings = ReviewSettings.for_organisation(ctx.organisation)
+        formulas = [f"{r.name} = {r.formula}" for r in settings.ratios.filter(enabled=True)]
+        result.add(Note("Groups: " + "; ".join(engine.describe_groups(settings, ctx.source.accounts())) + ". Ratios: "
+                        + "; ".join(formulas) + ". Change them in Admin > Review > Review settings. --L1 shows the "
+                        "GL accounts in each group; --L1 --lab only Labour's."))
+    result.add(Note(f"Read from Xero first: {g.copied.added} new, {g.copied.updated} changed and "
+                    f"{g.copied.unchanged} unchanged transaction(s). Unassigned is what isn't tagged to any "
+                    f"{dimension.name.lower()}; tag it with /tag --dim {dimension.code} --all --{period.label}."))
     return result
+
+
+def _by_account(g):
+    columns = g.columns
+    table = Table([Column("Code"), Column("Account")] + _value_columns(g))
+    totals = {}
+    for category, title in SECTIONS:
+        ids = sorted((a for a, c in g.categories.items() if c == category),
+                     key=lambda a: (g.accounts[a].code, g.accounts[a].name))
+        if not ids:
+            continue
+        table.add("", title, *([None] * (len(columns) + 3)), total=True)
+        section = defaultdict(lambda: ZERO)
+        for account_id in ids:
+            row = g.row(account_id)
+            ila, xer = sum(row, ZERO), g.xero_amounts.get(account_id, ZERO)
+            if not any(row) and not xer:
+                continue
+            for c, amount in zip(columns, row):
+                section[c] += amount
+            section["ila"] += ila
+            section["xero"] += xer
+            account = g.accounts[account_id]
+            table.add(account.code, account.name, *row, ila, xer, xer - ila)
+        totals[category] = section
+        _total_row(table, f"Total {title.lower()}", columns, section)
+        if category == "cost_of_sales":
+            _total_row(table, "Gross profit", columns, _combine(totals, ["revenue"], ["cost_of_sales"], columns))
+    net = _combine(totals, list(INCOME_CATEGORIES), ["cost_of_sales", "expenses"], columns)
+    other = g.unattributed
+    if other:
+        table.add("", "Other items in Xero not linked to an account, e.g. currency gains (losses)",
+                  *([ZERO] * len(columns)), ZERO, other, other)
+        net["xero"] += other
+    _total_row(table, "Net profit", columns, net)
+    return table
+
+
+# --- By review group (--L0, --L1) --------------------------------------------------------------------------------
+
+def _review_lines(ctx, g):
+    """The accounts as the review's lines, each in its review group, with an amount per column: the dimension's
+    values, Unassigned, "ila" (their total) and "xero"."""
+    from review.models import ReviewSettings
+
+    group_of = engine.classify(ReviewSettings.for_organisation(ctx.organisation), ctx.source.accounts())
+    lines = []
+    for account_id, account in g.accounts.items():
+        category = g.categories.get(account_id)
+        if not category:
+            continue
+        row = g.row(account_id)
+        values = dict(zip(g.columns, row)) | {"ila": sum(row, ZERO), "xero": g.xero_amounts.get(account_id, ZERO)}
+        if not any(values.values()):
+            continue
+        lines.append(engine.Line(str(account_id), account.code or "", account.name,
+                                 group_of.get(account.source_id) or engine._fallback(category), values))
+    if g.unattributed:  # as in /review: a cost in Other operating costs, so the groups add up to Xero's net profit
+        values = {c: ZERO for c in g.columns} | {"ila": ZERO, "xero": -g.unattributed}
+        lines.append(engine.Line(engine.UNATTRIBUTED, "", "Not on an account row (e.g. currency gains and losses)",
+                                 "opx", values))
+    lines.sort(key=lambda line: (list(engine.GROUPS).index(line.group), line.code or "~", line.name))
+    return lines
+
+
+def _amounts(g, get):
+    """A table row's amounts from ``get(column key)``: each value, Unassigned, iLA's total, Xero and the difference."""
+    return [get(c) for c in g.columns] + [get("ila"), get("xero"), get("xero") - get("ila")]
+
+
+def _l0(ctx, g, lines):
+    from review import ratios
+    from review.models import ReviewSettings
+
+    from .output import Ratio
+
+    keys = g.columns + ["ila", "xero"]
+    totals = {key: engine.totals(lines, key) for key in keys}
+    present = {line.group for line in lines}
+    table = Table([Column("Ref"), Column("Line")] + _value_columns(g), title="P&L by group")
+
+    def group_rows(*groups):
+        for group in groups:
+            if group in present:
+                table.add(group, engine.GROUPS[group][0], *_amounts(g, lambda key: totals[key][group]))
+
+    def total_row(key, label):
+        table.add("", label, *_amounts(g, lambda column: totals[column][key]), total=True)
+
+    group_rows("rev", "cogs")
+    total_row("gp", "Gross profit")
+    group_rows("oth", "lab", "opx")
+    total_row("ebitda", "EBITDA")
+    group_rows("da", "int", "tax")
+    total_row("np", "Net profit")
+    for r in ReviewSettings.for_organisation(ctx.organisation).ratios.filter(enabled=True):
+        try:
+            found = [ratios.value(r.formula, lines, totals[key], key) for key in keys]
+        except ratios.FormulaError:
+            table.add("", f"{r.name}: formula needs fixing in Review settings", *([None] * (len(keys) + 1)))
+            continue
+        table.add("", r.name, *[Ratio(v) if v is not None else None for v in found], None)
+    return table
+
+
+def _l1(g, lines, focus):
+    keys = g.columns + ["ila", "xero"]
+    totals = {key: engine.totals(lines, key) for key in keys}
+    present = [group for group in engine.GROUPS if any(line.group == group for line in lines)]
+    table = Table([Column("Code"), Column("Account")] + _value_columns(g), title="GL accounts by group")
+
+    def total_row(key, label):
+        table.add("", label, *_amounts(g, lambda column: totals[column][key]), total=True)
+
+    gp_after = next((x for x in ("cogs", "rev") if x in present), None)
+    ebitda_after = next((x for x in ("opx", "lab", "oth") if x in present), gp_after)
+    for group in [x for x in present if not focus or x in focus]:
+        label = engine.GROUPS[group][0]
+        table.add("", label, *([None] * (len(keys) + 1)), total=True)
+        for line in (line for line in lines if line.group == group):
+            table.add(line.code, line.name, *_amounts(g, lambda key: line.values[key]))
+        total_row(group, f"Total {label.lower()}")
+        if not focus:
+            if group == gp_after:
+                total_row("gp", "Gross profit")
+            if group == ebitda_after:
+                total_row("ebitda", "EBITDA")
+    if not focus:
+        total_row("np", "Net profit")
+    return table
 
 
 def _pending(ctx, dimension, period):
